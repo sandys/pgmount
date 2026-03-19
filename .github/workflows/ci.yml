@@ -13,7 +13,7 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  test:
+  build-and-test:
     runs-on: ubuntu-latest
 
     services:
@@ -64,7 +64,7 @@ jobs:
             cargo-target-1.85-${{ hashFiles('**/Cargo.lock') }}-
             cargo-target-1.85-
 
-      - name: Build and check
+      - name: Build and clippy
         run: |
           cargo clippy --all-targets
           cargo test -p pgmount-core --no-run
@@ -77,6 +77,9 @@ jobs:
         run: cargo test -p pgmount-core
 
       - name: FUSE mount integration tests
+        # FUSE requires /dev/fuse — available on GitHub runners but not in
+        # Docker-based environments like nektos/act.
+        if: ${{ !env.ACT }}
         env:
           PGPASSWORD: pgmount
           DB_CONN: "host=localhost user=pgmount password=pgmount dbname=testdb"
