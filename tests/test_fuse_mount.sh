@@ -98,6 +98,11 @@ MNT="${PGMOUNT_TEST_MNT:-/mnt/pgtest}"
 DB_CONN="${DB_CONN:-host=postgres user=pgmount password=pgmount dbname=testdb}"
 DB_HOST="${DB_HOST:-$(echo "$DB_CONN" | grep -oP 'host=\K\S+')}"
 
+# Find the pgmount binary: explicit env var > cargo target relative to script > /workspace fallback
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PGMOUNT_BIN="${PGMOUNT_BIN:-$PROJECT_ROOT/target/debug/pgmount}"
+
 # Issue #11: reliable cleanup via trap
 cleanup() {
     echo ""
@@ -206,7 +211,7 @@ echo "Test data created"
 
 # Build pgmount
 echo "Building pgmount..."
-cargo build 2>&1 | tail -1
+(cd "$PROJECT_ROOT" && cargo build 2>&1 | tail -1)
 
 # Create mount point and mount
 mkdir -p "$MNT"
@@ -214,7 +219,7 @@ fusermount -u "$MNT" 2>/dev/null || true
 sleep 0.5
 
 echo "Mounting filesystem..."
-RUST_LOG=warn /workspace/target/debug/pgmount mount -c "$DB_CONN" "$MNT" &
+RUST_LOG=warn "$PGMOUNT_BIN" mount -c "$DB_CONN" "$MNT" &
 MOUNT_PID=$!
 sleep 2
 
