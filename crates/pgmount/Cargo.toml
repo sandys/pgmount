@@ -7,6 +7,9 @@ edition = "2021"
 name = "pgmount"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 pgmount-core = { path = "../pgmount-core" }
 tokio = { version = "1", features = ["full"] }

@@ -4,3 +4,12 @@ members = [
     "crates/pgmount-core",
 ]
 resolver = "2"
+
+[workspace.lints.rust]
+dead_code = "warn"
+unused_imports = "warn"
+unused_variables = "warn"
+
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+too_many_arguments = { level = "allow", priority = 1 }

@@ -2,48 +2,39 @@ use pgmount_core::db::pool::create_pool;
 use pgmount_core::db::queries::{introspection, rows, stats, indexes};
 use pgmount_core::fs::cache::MetadataCache;
 use pgmount_core::fs::inode::{InodeTable, NodeIdentity};
-use std::sync::Once;
 use std::time::Duration;
+use tokio::sync::OnceCell;
 
-static INIT: Once = Once::new();
-static SETUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static SETUP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static SETUP_CELL: OnceCell<()> = OnceCell::const_new();
 
 fn connection_string() -> String {
     std::env::var("TEST_DATABASE_URL")
         .unwrap_or_else(|_| "host=postgres user=pgmount password=pgmount dbname=testdb".to_string())
 }
 
-/// Ensure test schema exists. Uses a dedicated schema to avoid conflicts.
+/// Ensure test schema exists. Uses tokio::sync::OnceCell for async-safe one-time init.
 async fn setup_db(pool: &deadpool_postgres::Pool) {
-    // Only run setup once across all tests
-    if SETUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    let _lock = SETUP_LOCK.lock().unwrap();
-    if SETUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    let client = pool.get().await.unwrap();
-    client.batch_execute("
-        DROP SCHEMA IF EXISTS rust_test CASCADE;
-        CREATE SCHEMA rust_test;
-        CREATE TABLE rust_test.users (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            email TEXT,
-            age INTEGER,
-            active BOOLEAN DEFAULT true
-        );
-        INSERT INTO rust_test.users (id, name, email, age, active)
-        OVERRIDING SYSTEM VALUE
-        VALUES
-            (1, 'Alice', 'alice@example.com', 30, true),
-            (2, 'Bob', 'bob@example.com', 25, false),
-            (3, 'Charlie', 'charlie@example.com', 35, true);
-        ANALYZE rust_test.users;
-    ").await.unwrap();
-    SETUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+    SETUP_CELL.get_or_init(|| async {
+        let client = pool.get().await.unwrap();
+        client.batch_execute("
+            DROP SCHEMA IF EXISTS rust_test CASCADE;
+            CREATE SCHEMA rust_test;
+            CREATE TABLE rust_test.users (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT,
+                age INTEGER,
+                active BOOLEAN DEFAULT true
+            );
+            INSERT INTO rust_test.users (id, name, email, age, active)
+            OVERRIDING SYSTEM VALUE
+            VALUES
+                (1, 'Alice', 'alice@example.com', 30, true),
+                (2, 'Bob', 'bob@example.com', 25, false),
+                (3, 'Charlie', 'charlie@example.com', 35, true);
+            ANALYZE rust_test.users;
+        ").await.unwrap();
+    }).await;
 }
 
 async fn get_pool() -> deadpool_postgres::Pool {

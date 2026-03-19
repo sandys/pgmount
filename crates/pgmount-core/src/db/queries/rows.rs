@@ -24,7 +24,6 @@ pub fn encode_pk_value(value: &str) -> String {
 /// `extra_where` is appended to the WHERE clause (e.g., "\"category\"::text = $1")
 /// `extra_order` overrides the default PK ordering (e.g., "\"name\" ASC")
 /// `extra_params` are the parameters for the extra_where clause
-#[allow(clippy::too_many_arguments)]
 pub async fn query_rows(
     pool: &Pool,
     schema: &str,
