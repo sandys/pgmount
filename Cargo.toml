@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/pgmount",
+    "crates/pgmount-core",
+]
+resolver = "2"
