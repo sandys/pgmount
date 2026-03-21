@@ -3,11 +3,11 @@
 ## Project Structure
 
 ```
-pgmount/
+openeral/
   crates/
-    pgmount/                        # Binary crate (CLI entry point)
+    openeral/                        # Binary crate (CLI entry point)
       src/main.rs                   # Tokio main, tracing init, calls cli::run()
-    pgmount-core/                   # Library crate (all logic)
+    openeral-core/                   # Library crate (all logic)
       migrations/                   # Refinery SQL migrations (V1–V4)
       src/
         lib.rs                      # Module declarations
@@ -17,11 +17,11 @@ pgmount/
           mount.rs                  # Mount subcommand (pool + migrations + fuser::mount2)
           workspace.rs              # Workspace subcommands (create, mount, seed, list, delete)
           unmount.rs                # fusermount -u wrapper
-          list.rs                   # Reads /proc/mounts for pgmount entries
+          list.rs                   # Reads /proc/mounts for openeral entries
           version.rs                # Prints CARGO_PKG_VERSION
         config/
           types.rs                  # MountConfig, WorkspaceMountConfig
-          connection.rs             # CLI arg > env var > ~/.pgmount/config.yml
+          connection.rs             # CLI arg > env var > ~/.openeral/config.yml
         db/
           migrate.rs                # run_migrations() + log_mount_session() via refinery
           pool.rs                   # deadpool-postgres pool (max 16, statement timeout)
@@ -64,11 +64,11 @@ pgmount/
         integration.rs              # Rust integration tests
         workspace_integration.rs    # Workspace DB operations tests
   sandboxes/
-    pgmount/                        # OpenShell sandbox for AI agents
-      Dockerfile                    # Multi-stage: build pgmount + extend openclaw base
+    openeral/                        # OpenShell sandbox for AI agents
+      Dockerfile                    # Multi-stage: build openeral + extend openclaw base
       policy.yaml                   # Landlock filesystem + capability policy
-      pgmount-start.sh             # Entrypoint: starts pgmount, polls mount, execs agent
-      skills/pgmount-navigate/     # Agent skill for /db navigation
+      openeral-start.sh             # Entrypoint: starts openeral, polls mount, execs agent
+      skills/openeral-navigate/     # Agent skill for /db navigation
   tests/
     test_fuse_mount.sh              # FUSE mount integration test suite
 ```
@@ -95,7 +95,7 @@ pgmount/
 
 ## Two FUSE Filesystems
 
-pgmount has two separate `fuser::Filesystem` implementations:
+openeral has two separate `fuser::Filesystem` implementations:
 
 ### PgmountFilesystem (read-only)
 
@@ -105,7 +105,7 @@ Mounts database content at a path (e.g., `/db`). Generates content on-the-fly fr
 
 ### WorkspaceFilesystem (read-write)
 
-Mounts an opaque file store at a path (e.g., `/home/agent`). Stores and retrieves files by path from `_pgmount.workspace_files`. Uses a simple path-based inode table (`String` ↔ `u64`).
+Mounts an opaque file store at a path (e.g., `/home/agent`). Stores and retrieves files by path from `_openeral.workspace_files`. Uses a simple path-based inode table (`String` ↔ `u64`).
 
 **FUSE callbacks:** `lookup`, `getattr`, `setattr`, `readdir`, `open`, `read`, `write`, `flush`, `release`, `create`, `mkdir`, `unlink`, `rmdir`, `rename`, `opendir`, `releasedir`
 
@@ -114,15 +114,15 @@ Mounts an opaque file store at a path (e.g., `/home/agent`). Stores and retrieve
 ### Read-only mount tables
 
 ```
-_pgmount.schema_version   — migration tracking (refinery)
-_pgmount.mount_log        — audit log of mount sessions
-_pgmount.cache_hints      — persistent cache hints per schema/table
+_openeral.schema_version   — migration tracking (refinery)
+_openeral.mount_log        — audit log of mount sessions
+_openeral.cache_hints      — persistent cache hints per schema/table
 ```
 
 ### Workspace tables
 
 ```sql
-_pgmount.workspace_config (
+_openeral.workspace_config (
     id TEXT PRIMARY KEY,            -- workspace identifier
     display_name TEXT,
     config JSONB DEFAULT '{}',      -- {"auto_dirs": [...], "seed_files": {...}}
@@ -130,7 +130,7 @@ _pgmount.workspace_config (
     updated_at TIMESTAMPTZ
 )
 
-_pgmount.workspace_files (
+_openeral.workspace_files (
     workspace_id TEXT REFERENCES workspace_config(id) ON DELETE CASCADE,
     path TEXT,                      -- e.g. "/.claude/memory/note.md"
     parent_path TEXT,               -- e.g. "/.claude/memory"
@@ -180,7 +180,7 @@ Primary key values are percent-encoded in directory names using the `percent-enc
 Configured via `--statement-timeout` (default 30s). Set at the PostgreSQL connection level. Prevents runaway queries from hanging the FUSE filesystem.
 
 ### Migrations
-Managed by `refinery` (`embed_migrations!` macro). SQL files in `crates/pgmount-core/migrations/`. Run automatically before FUSE mount; skip with `--skip-migrations`.
+Managed by `refinery` (`embed_migrations!` macro). SQL files in `crates/openeral-core/migrations/`. Run automatically before FUSE mount; skip with `--skip-migrations`.
 
 ## Filesystem Layout (Read-Only Mount)
 

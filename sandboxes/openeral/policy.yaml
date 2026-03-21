@@ -1,0 +1,23 @@
+version: "1.0"
+name: openeral
+description: OpenClaw sandbox with PostgreSQL mounted as read-only filesystem at /db
+
+extends: openclaw
+
+filesystem:
+  read_only:
+    - /db
+    - /usr/local/bin/openeral
+    - /etc/fuse.conf
+  read_write:
+    - /sandbox
+    - /tmp
+    - /home/agent
+
+capabilities:
+  required:
+    - SYS_ADMIN
+
+devices:
+  required:
+    - /dev/fuse

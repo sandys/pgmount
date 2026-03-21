@@ -1,5 +1,5 @@
 #!/bin/bash
-# Comprehensive FUSE mount integration test for pgmount
+# Comprehensive FUSE mount integration test for openeral
 # Runs inside the Docker dev container with PostgreSQL available
 set -uo pipefail
 # Note: we intentionally do NOT use 'set -e' because individual test assertions
@@ -94,14 +94,14 @@ assert_enoent() {
     fi
 }
 
-MNT="${PGMOUNT_TEST_MNT:-/mnt/pgtest}"
+MNT="${OPENERAL_TEST_MNT:-/mnt/pgtest}"
 DB_CONN="${DB_CONN:-host=postgres user=pgmount password=pgmount dbname=testdb}"
 DB_HOST="${DB_HOST:-$(echo "$DB_CONN" | grep -oP 'host=\K\S+')}"
 
-# Find the pgmount binary: explicit env var > cargo target relative to script > /workspace fallback
+# Find the openeral binary: explicit env var > cargo target relative to script > /workspace fallback
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PGMOUNT_BIN="${PGMOUNT_BIN:-$PROJECT_ROOT/target/debug/pgmount}"
+OPENERAL_BIN="${OPENERAL_BIN:-$PROJECT_ROOT/target/debug/openeral}"
 
 # Issue #11: reliable cleanup via trap
 cleanup() {
@@ -115,7 +115,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== pgmount FUSE Integration Tests ==="
+echo "=== openeral FUSE Integration Tests ==="
 echo ""
 
 # ---- Setup ----
@@ -123,7 +123,7 @@ echo "--- Setup ---"
 
 # Create test schema and tables
 export PGPASSWORD=pgmount
-psql -h "$DB_HOST" -U pgmount -d testdb -q <<'SQL'
+psql -h "$DB_HOST" -U openeral -d testdb -q <<'SQL'
 -- Clean slate
 DROP SCHEMA IF EXISTS test_schema CASCADE;
 CREATE SCHEMA test_schema;
@@ -209,8 +209,8 @@ ANALYZE;
 SQL
 echo "Test data created"
 
-# Build pgmount
-echo "Building pgmount..."
+# Build openeral
+echo "Building openeral..."
 (cd "$PROJECT_ROOT" && cargo build 2>&1 | tail -1)
 
 # Create mount point and mount
@@ -219,7 +219,7 @@ fusermount -u "$MNT" 2>/dev/null || true
 sleep 0.5
 
 echo "Mounting filesystem..."
-RUST_LOG=warn "$PGMOUNT_BIN" mount -c "$DB_CONN" "$MNT" &
+RUST_LOG=warn "$OPENERAL_BIN" mount -c "$DB_CONN" "$MNT" &
 MOUNT_PID=$!
 sleep 2
 

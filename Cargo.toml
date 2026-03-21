@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/pgmount",
-    "crates/pgmount-core",
+    "crates/openeral",
+    "crates/openeral-core",
 ]
 resolver = "2"
 

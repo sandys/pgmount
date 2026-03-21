@@ -12,7 +12,7 @@ docker compose up -d
 docker compose exec dev cargo build
 
 # Run tests
-docker compose exec dev cargo test -p pgmount-core
+docker compose exec dev cargo test -p openeral-core
 
 # Run FUSE mount integration tests
 docker compose exec -e PGPASSWORD=pgmount dev bash tests/test_fuse_mount.sh
@@ -30,16 +30,16 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 
 ## Project Structure
 
-- `crates/pgmount/` — binary crate (thin CLI entry point)
-- `crates/pgmount-core/` — library crate (all logic: FUSE filesystem, DB queries, CLI commands)
-- `crates/pgmount-core/migrations/` — SQL migrations (V1–V4), managed by refinery
-- `sandboxes/pgmount/` — OpenShell container image for running AI agents
+- `crates/openeral/` — binary crate (thin CLI entry point)
+- `crates/openeral-core/` — library crate (all logic: FUSE filesystem, DB queries, CLI commands)
+- `crates/openeral-core/migrations/` — SQL migrations (V1–V4), managed by refinery
+- `sandboxes/openeral/` — OpenShell container image for running AI agents
 - `tests/test_fuse_mount.sh` — FUSE mount integration tests (bash)
 
 ## Two Filesystems
 
 1. **PgmountFilesystem** (`fs/mod.rs`) — read-only mount of database content. Uses `NodeIdentity` enum for inode mapping.
-2. **WorkspaceFilesystem** (`fs/workspace.rs`) — read-write mount for agent state. Uses path-based inode table. Files stored in `_pgmount.workspace_files`.
+2. **WorkspaceFilesystem** (`fs/workspace.rs`) — read-write mount for agent state. Uses path-based inode table. Files stored in `_openeral.workspace_files`.
 
 ## Conventions
 
