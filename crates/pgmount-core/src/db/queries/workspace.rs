@@ -494,10 +494,10 @@ fn seed_dir_recursive<'a>(
 
     let mut entries = tokio::fs::read_dir(local_path)
         .await
-        .map_err(|e| FsError::IoError(e))?;
+        .map_err(FsError::IoError)?;
 
-    while let Some(entry) = entries.next_entry().await.map_err(|e| FsError::IoError(e))? {
-        let file_type = entry.file_type().await.map_err(|e| FsError::IoError(e))?;
+    while let Some(entry) = entries.next_entry().await.map_err(FsError::IoError)? {
+        let file_type = entry.file_type().await.map_err(FsError::IoError)?;
         let name = entry.file_name().to_string_lossy().to_string();
         let child_path = if db_path == "/" {
             format!("/{}", name)
@@ -528,7 +528,7 @@ fn seed_dir_recursive<'a>(
         } else if file_type.is_file() {
             let content = tokio::fs::read(entry.path())
                 .await
-                .map_err(|e| FsError::IoError(e))?;
+                .map_err(FsError::IoError)?;
             let file = WorkspaceFile {
                 workspace_id: workspace_id.to_string(),
                 path: child_path,

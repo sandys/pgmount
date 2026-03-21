@@ -1,106 +1,84 @@
 ---
 name: pgmount-navigate
-description: Navigate a PostgreSQL database mounted as a filesystem at /db
+description: Navigate a PostgreSQL database mounted at /db and manage persistent workspace state
 ---
 
-# Navigating PostgreSQL via /db
+# pgmount — Database at /db, Workspace at $HOME
 
-A PostgreSQL database is mounted as a read-only filesystem at `/db`. You can explore it using standard file tools — no SQL needed.
+You have two mounted filesystems:
 
-## Filesystem Layout
+- **`/db`** — read-only PostgreSQL database. Browse schemas, tables, rows as directories and files.
+- **`$HOME`** (typically `/home/agent`) — read-write workspace backed by PostgreSQL. Your `~/.claude/` directory persists across restarts.
 
-```
-/db/
-  <schema>/
-    <table>/
-      .info/
-        columns.json    # Column names, types, nullability
-        schema.sql      # CREATE TABLE statement
-        count           # Row count
-        primary_key     # Primary key column(s)
-      .export/
-        data.json/
-          page_1.json   # All rows as JSON (paginated)
-        data.csv/
-          page_1.csv    # All rows as CSV (paginated)
-      .filter/
-        <column>/<value>/<pk>/row.json   # Filter rows by column value
-      .order/
-        <column>/asc/   # Rows sorted ascending
-        <column>/desc/  # Rows sorted descending
-      .indexes/
-        <index_name>    # Index definitions
-      page_1/
-        <pk_value>/
-          <column>      # Individual column value as plain text
-          row.json      # Full row as JSON
-          row.csv       # Full row as CSV
-          row.yaml      # Full row as YAML
-      page_2/
-        ...
-```
-
-## Common Operations
-
-### Discover what's available
-```bash
-ls /db/                           # List schemas
-ls /db/public/                    # List tables in a schema
-```
-
-### Inspect table structure
-```bash
-cat /db/public/users/.info/columns.json   # Column definitions
-cat /db/public/users/.info/count          # Row count
-cat /db/public/users/.info/primary_key    # Primary key
-```
-
-### Look up specific rows (preferred for targeted access)
-```bash
-cat /db/public/users/.filter/id/42/42/row.json        # Find user with id=42
-cat /db/public/users/.filter/email/alice@example.com/  # Find by email
-```
-
-### Browse rows page by page
-```bash
-ls /db/public/users/page_1/           # List row directories (by primary key)
-cat /db/public/users/page_1/1/row.json   # Read full row
-cat /db/public/users/page_1/1/name       # Read single column value
-```
-
-### Export data
-```bash
-cat /db/public/users/.export/data.csv/page_1.csv    # CSV export
-cat /db/public/users/.export/data.json/page_1.json  # JSON export
-```
-
-### Sort results
-```bash
-ls /db/public/users/.order/created_at/desc/page_1/   # Newest first
-```
-
-### Search within rows
-```bash
-grep -r "pattern" /db/public/users/page_1/   # Search page content
-```
-
-## Workspace (Persistent State)
-
-If a workspace is mounted (typically at `$HOME` / `/home/agent`), your `~/.claude/` directory is backed by PostgreSQL and persists across restarts. This is a standard read-write filesystem — create, edit, and delete files normally.
+## Database: Quick Reference
 
 ```bash
-# Your config, memory, plans, tasks, etc. persist automatically
-ls ~/.claude/
-cat ~/.claude/settings.json
-echo '{"key":"value"}' > ~/.claude/memory/note.md
+# Discover structure
+ls /db/                                        # list schemas
+ls /db/public/                                 # list tables
+cat /db/public/users/.info/columns.json        # column definitions
+cat /db/public/users/.info/count               # row count
+cat /db/public/users/.info/primary_key         # primary key
+
+# Read rows
+cat /db/public/users/page_1/1/row.json         # full row as JSON
+cat /db/public/users/page_1/1/email            # single column
+
+# Filter (FAST — runs a targeted query)
+cat /db/public/users/.filter/id/42/42/row.json
+ls /db/public/users/.filter/active/true/
+
+# Sort
+ls /db/public/users/.order/created_at/desc/page_1/
+
+# Export
+cat /db/public/users/.export/data.csv/page_1.csv
+cat /db/public/users/.export/data.json/page_1.json
 ```
 
-## Important Notes
+## Database: Filesystem Layout
 
-- **Database at /db is read-only**: You cannot create, modify, or delete data in `/db/`. Any write attempt returns "Read-only file system".
-- **Workspace is read-write**: Files under `$HOME` (if workspace is enabled) are writable and persist in PostgreSQL.
-- **Check count first**: Before scanning a table, read `.info/count`. Tables with millions of rows will have thousands of pages — do not `ls` them all.
-- **Use .filter/ for lookups**: If you know what you're looking for, `.filter/` is much faster than browsing pages.
-- **Page size**: Each `page_N/` directory contains up to 1000 rows by default (configurable via `PGMOUNT_PAGE_SIZE`).
-- **Composite primary keys**: Rows with composite PKs use the format `col1=val1,col2=val2` as directory names.
-- **NULL values**: NULL column values appear as empty files.
+```
+/db/<schema>/<table>/
+  .info/columns.json     — column names, types, nullability
+  .info/schema.sql       — CREATE TABLE statement
+  .info/count            — row count
+  .info/primary_key      — PK column(s)
+  .export/data.json/     — paginated JSON export (page_1.json, page_2.json, ...)
+  .export/data.csv/      — paginated CSV export
+  .filter/<col>/<val>/   — rows matching column=value
+  .order/<col>/asc|desc/ — sorted rows
+  .indexes/<name>        — index definitions
+  page_1/                — first 1000 rows
+    <pk>/                — row directory (named by primary key value)
+      <column>           — column value as plain text
+      row.json           — full row as JSON
+      row.csv            — full row as CSV
+      row.yaml           — full row as YAML
+  page_2/                — next 1000 rows
+```
+
+## Workspace: Persistent State
+
+Your `~/.claude/` directory is backed by PostgreSQL. Everything you write persists across container restarts.
+
+```bash
+# All of these persist automatically
+ls ~/.claude/                      # memory, plans, sessions, tasks, todos
+cat ~/.claude/settings.json        # your settings
+echo "note" > ~/.claude/memory/context.md
+
+# Create any files/directories — they all persist
+mkdir -p ~/projects/myapp
+echo "hello" > ~/projects/myapp/notes.txt
+```
+
+## Rules
+
+1. **`/db` is read-only.** Any write attempt returns "Read-only file system".
+2. **Always check `.info/count` before scanning a table.** Tables with millions of rows have thousands of pages — don't `ls` them all.
+3. **Use `.filter/` for lookups.** It runs a targeted SQL query and is much faster than browsing pages.
+4. **Pages contain up to 1000 rows** (configurable via `PGMOUNT_PAGE_SIZE`).
+5. **Composite primary keys** use the format `col1=val1,col2=val2` as directory names.
+6. **NULL values** appear as empty files.
+7. **`$HOME` is read-write.** Files persist in PostgreSQL — treat it like a normal home directory.

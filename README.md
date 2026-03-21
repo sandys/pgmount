@@ -1,116 +1,37 @@
 # pgmount
 
-Mount PostgreSQL databases as virtual filesystems using FUSE.
-
-Browse schemas, tables, rows, and columns as directories and files. Filter, sort, and export data using standard shell commands.
+Mount PostgreSQL databases as virtual filesystems. Browse schemas, tables, rows, and columns as directories and files using standard shell commands.
 
 ```
 $ pgmount mount -c "host=localhost dbname=myapp" /mnt/db
 
-$ ls /mnt/db/public/users/
-.export  .filter  .indexes  .info  .order  page_1
-
 $ ls /mnt/db/public/users/page_1/
 1  2  3
 
-$ cat /mnt/db/public/users/page_1/1/name
-Alice
-
 $ cat /mnt/db/public/users/page_1/1/row.json
-{
-  "id": 1,
-  "name": "Alice",
-  "email": "alice@example.com",
-  "age": 30,
-  "active": true
-}
+{ "id": 1, "name": "Alice", "email": "alice@example.com" }
 
-$ ls /mnt/db/public/users/.filter/active/true/
-1  3
-
-$ cat /mnt/db/public/users/.export/data.csv/page_1.csv
-id,name,email,age,active
-1,Alice,alice@example.com,30,true
-2,Bob,bob@example.com,25,false
-3,Charlie,charlie@example.com,35,true
+$ cat /mnt/db/public/users/.filter/active/true/1/name
+Alice
 ```
+
+pgmount also provides **writable workspaces** — a read-write FUSE filesystem backed by PostgreSQL, designed for AI agents (Claude Code, Codex, etc.) that need persistent `~/.claude/` state across container restarts.
 
 ## Features
 
 - **Browse database structure** as a directory tree: schemas / tables / rows / columns
-- **Paginated row listing** — rows grouped into `page_N/` directories (configurable page size, default 1000)
-- **Read column values** as plain text files
-- **Row serialization** in JSON, CSV, and YAML (`row.json`, `row.csv`, `row.yaml`)
-- **Paginated bulk export** via `.export/data.json/page_N.json`, `.export/data.csv/page_N.csv`, etc.
-- **Filter rows** with `.filter/<column>/<value>/` directories
+- **Filter rows** with `.filter/<column>/<value>/` — targeted queries, no pagination needed
 - **Sort rows** with `.order/<column>/asc/` or `.order/<column>/desc/`
-- **Inspect metadata** via `.info/columns.json`, `.info/schema.sql`, `.info/count`, `.info/primary_key`
-- **View indexes** via `.indexes/<index_name>` files
-- **Composite primary keys** displayed as `col1=val1,col2=val2` directories
-- **Percent-encoded PK values** — special characters (`/`, `,`, `=`, `%`) in PK values are safely encoded
-- **NULL handling** — NULL values read as `NULL`
-- **Tables/columns with special characters** (spaces, quotes) handled correctly
-- **Metadata caching** with configurable TTL
-- **Connection pooling** via deadpool-postgres (16 connections)
-- **Statement timeout** — configurable per-query timeout prevents hung filesystems (default 30s)
-- **Multiple schemas** — all non-system schemas mounted, or filter with `--schemas`
-- **Automatic migrations** — creates `_pgmount` internal schema on first mount for audit logging and cache hints (via refinery)
-- **Writable workspaces** — mount a read-write FUSE filesystem backed by PostgreSQL for persistent agent state (e.g., `~/.claude/`), with runtime-configurable directory layouts and seed files
-- **OpenShell sandbox** — pre-built sandbox image for running AI agents with database access at `/db` and optional persistent workspace at `/home/agent`
-
-## Filesystem Layout
-
-```
-/mnt/db/
-  <schema>/                              # e.g. public/
-    <table>/                             # e.g. users/
-      .info/
-        columns.json                     # column metadata as JSON array
-        schema.sql                       # approximate CREATE TABLE DDL
-        count                            # exact row count
-        primary_key                      # PK column name(s)
-      .export/
-        data.json/                       # export directory (paginated)
-          page_1.json                    # rows 1-1000 as JSON array
-          page_2.json                    # rows 1001-2000
-          ...
-        data.csv/
-          page_1.csv
-          ...
-        data.yaml/
-          page_1.yaml
-          ...
-      .filter/
-        <column>/                        # e.g. active/
-          <value>/                       # e.g. true/
-            <pk>/...                     # matching row directories
-      .order/
-        <column>/                        # e.g. name/
-          asc/                           # rows sorted ascending
-            <pk>/...
-          desc/                          # rows sorted descending
-            <pk>/...
-      .indexes/
-        <index_name>                     # index metadata file
-      page_1/                            # rows 1-1000
-        <pk_value>/                      # e.g. 1/ or col1=val1,col2=val2/
-          <column_name>                  # column value as text file
-          row.json                       # full row as JSON
-          row.csv                        # full row as CSV
-          row.yaml                       # full row as YAML
-      page_2/                            # rows 1001-2000
-        ...
-```
+- **Export data** in JSON, CSV, YAML via `.export/data.json/page_N.json`
+- **Inspect metadata** via `.info/columns.json`, `.info/schema.sql`, `.info/count`
+- **Paginated row listing** — rows grouped into `page_N/` directories (default 1000)
+- **Connection pooling**, **statement timeout**, **metadata caching** with configurable TTL
+- **Writable workspaces** — persistent agent state stored in PostgreSQL, mountable anywhere
+- **OpenShell sandbox** — pre-built container image with database at `/db` and workspace at `/home/agent`
 
 ## Installation
 
-### Requirements
-
-- Rust 1.85+
-- FUSE 3 (`libfuse3-dev` on Debian/Ubuntu, `fuse3` on Fedora/Arch)
-- PostgreSQL client libraries (`libpq-dev`)
-
-### Build from source
+**Requirements:** Rust 1.85+, FUSE 3 (`libfuse3-dev`), PostgreSQL client libraries (`libpq-dev`)
 
 ```bash
 cargo build --release
@@ -119,180 +40,178 @@ sudo cp target/release/pgmount /usr/local/bin/
 
 ## Usage
 
-### Mount a database
+### Mount a database (read-only)
 
 ```bash
-# Using a connection string
+# Connection string
 pgmount mount -c "host=localhost user=postgres dbname=myapp" /mnt/db
 
-# Using a PostgreSQL URI
+# PostgreSQL URI
 pgmount mount -c "postgres://user:pass@localhost/myapp" /mnt/db
 
-# Using environment variable
+# Environment variable
 export PGMOUNT_DATABASE_URL="host=localhost dbname=myapp"
 pgmount mount /mnt/db
 ```
 
-### Options
+### Mount options
 
 ```
 pgmount mount [OPTIONS] <MOUNT_POINT>
 
-Arguments:
-  <MOUNT_POINT>    Path where the filesystem will be mounted
-
-Options:
-  -c, --connection <CONNECTION>         PostgreSQL connection string
-  -s, --schemas <SCHEMAS>               Only show these schemas (comma-separated)
-      --cache-ttl <SECONDS>             Metadata cache TTL [default: 30]
-      --page-size <N>                   Max rows per page directory [default: 1000]
-      --statement-timeout <SECONDS>     SQL statement timeout [default: 30]
-      --read-only <BOOL>                Mount read-only [default: true]
-      --skip-migrations                 Skip automatic database migrations
-  -f, --foreground                      Run in foreground
+  -c, --connection <STRING>        PostgreSQL connection string
+  -s, --schemas <LIST>             Only show these schemas (comma-separated)
+      --cache-ttl <SECONDS>        Metadata cache TTL [default: 30]
+      --page-size <N>              Max rows per page directory [default: 1000]
+      --statement-timeout <SECS>   SQL statement timeout [default: 30]
+      --skip-migrations            Skip automatic database migrations
+  -f, --foreground                 Run in foreground
 ```
 
-### Workspaces (read-write persistent agent state)
-
-Workspaces store files in PostgreSQL, mounted as a read-write FUSE filesystem. Designed for AI agents that need persistent `~/.claude/` state across container restarts.
+### Browse and query
 
 ```bash
-# Create a workspace with auto-created directories
-pgmount workspace create agent-1 \
-  --display-name "My Agent" \
-  --config '{"auto_dirs":[".claude",".claude/memory",".claude/sessions"]}'
+# Discover structure
+ls /mnt/db/                                    # schemas
+ls /mnt/db/public/                             # tables
+cat /mnt/db/public/users/.info/columns.json    # column definitions
+cat /mnt/db/public/users/.info/count           # row count
 
-# Mount it
-pgmount workspace mount agent-1 /home/agent
+# Read data
+cat /mnt/db/public/users/page_1/42/row.json    # full row as JSON
+cat /mnt/db/public/users/page_1/42/email       # single column value
 
-# Use it — files are stored in PostgreSQL
-echo "hello" > /home/agent/.claude/test.txt
-cat /home/agent/.claude/test.txt  # → hello
+# Filter (targeted DB query — fast)
+cat /mnt/db/public/users/.filter/id/42/42/row.json
+ls /mnt/db/public/users/.filter/active/true/
 
-# Unmount and remount — data persists
-fusermount -u /home/agent
-pgmount workspace mount agent-1 /home/agent
-cat /home/agent/.claude/test.txt  # → hello
+# Sort
+ls /mnt/db/public/users/.order/name/asc/
 
-# Seed from a local directory
-pgmount workspace seed agent-1 --from /path/to/local/dir
-
-# List all workspaces
-pgmount workspace list
-
-# Delete a workspace and all its files
-pgmount workspace delete agent-1
+# Export
+cat /mnt/db/public/users/.export/data.csv/page_1.csv
+cat /mnt/db/public/users/.export/data.json/page_*.json | jq -s 'add'
 ```
 
 ### Unmount
 
 ```bash
 pgmount unmount /mnt/db
-# or
-fusermount -u /mnt/db
+# or: fusermount -u /mnt/db
 ```
 
-### List active mounts
+## Workspaces
+
+Workspaces provide a **read-write** FUSE filesystem backed by PostgreSQL. Files written to the mount point are transparently stored in the `_pgmount.workspace_files` table and persist across unmount/remount cycles.
+
+**Primary use case:** AI agents running in sandboxed containers that need persistent `HOME` directories — config, memory, plans, session transcripts, and other state that would otherwise be lost on restart.
+
+### Create and mount
 
 ```bash
-pgmount list
+# Create a workspace with pre-configured directories
+pgmount workspace create agent-1 \
+  --display-name "My Agent" \
+  --config '{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}'
+
+# Mount as a read-write filesystem
+pgmount workspace mount agent-1 /home/agent
+
+# Use it — all I/O transparently goes to PostgreSQL
+echo "hello" > /home/agent/.claude/test.txt
+cat /home/agent/.claude/test.txt   # → hello
+mkdir /home/agent/plans
 ```
 
-### Browsing examples
-
-Rows are organized into paginated `page_N/` directories under each table. Use `.filter/` for targeted access to specific rows.
+### Persistence
 
 ```bash
-# List schemas
-ls /mnt/db/
+# Unmount
+fusermount -u /home/agent
 
-# List tables in a schema
-ls /mnt/db/public/
+# Remount — data is still there
+pgmount workspace mount agent-1 /home/agent
+cat /home/agent/.claude/test.txt   # → hello
 
-# List pages in a table
-ls /mnt/db/public/users/
-# output: .export  .filter  .indexes  .info  .order  page_1  page_2
-
-# List rows in page 1
-ls /mnt/db/public/users/page_1/
-
-# Read a column value
-cat /mnt/db/public/users/page_1/42/email
-
-# Get full row as JSON
-cat /mnt/db/public/users/page_1/42/row.json
+# Verify in PostgreSQL directly
+psql -c "SELECT path, size FROM _pgmount.workspace_files WHERE workspace_id='agent-1';"
 ```
 
-**Accessing a specific row directly** — use `.filter/` instead of browsing pages:
+### Manage workspaces
 
 ```bash
-# Find user with id=42 (targeted DB query, no pagination needed)
-cat /mnt/db/public/users/.filter/id/42/42/row.json
-
-# Find all active users
-ls /mnt/db/public/users/.filter/active/true/
-
-# Find across all pages with shell globbing
-cat /mnt/db/public/users/page_*/42/row.json 2>/dev/null
+pgmount workspace list                          # list all workspaces
+pgmount workspace seed agent-1 --from ./data/   # seed from local directory
+pgmount workspace delete agent-1                # delete workspace + all files
 ```
 
-**Exporting data:**
+### Workspace config
+
+The `--config` JSON supports:
+
+```json
+{
+  "auto_dirs": [".claude", ".claude/memory", ".claude/plans"],
+  "seed_files": {
+    ".claude/settings.json": "{\"model\": \"sonnet\"}",
+    ".bashrc": "export PS1='agent> '"
+  }
+}
+```
+
+- `auto_dirs` — directories created automatically on first mount
+- `seed_files` — files pre-populated with the given content
+
+## Claude Code Integration
+
+pgmount workspaces are designed to work with [Claude Code](https://claude.ai/claude-code). When an agent runs with `HOME` pointing to a pgmount workspace, Claude Code's entire `~/.claude/` directory (memory, plans, tasks, sessions, settings) persists in PostgreSQL.
+
+### Standalone setup
 
 ```bash
-# Export page 1 as CSV
-cat /mnt/db/public/users/.export/data.csv/page_1.csv > users_page1.csv
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Export all pages (concatenate)
-cat /mnt/db/public/users/.export/data.json/page_*.json
+# Create and mount a workspace
+export PGMOUNT_DATABASE_URL="postgres://user:pass@localhost/mydb"
+pgmount workspace create my-agent --config '{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions",".claude/tasks"]}'
+pgmount workspace mount my-agent /home/agent
 
-# Export as a single stream with jq
-cat /mnt/db/public/users/.export/data.json/page_*.json | jq -s 'add'
+# Run Claude Code with HOME on the workspace
+HOME=/home/agent claude -p "Create a plan for my project" --model claude-sonnet-4-6
 ```
 
-**Metadata and indexes:**
+### In a sandbox container
 
 ```bash
-# View table metadata
-cat /mnt/db/public/users/.info/count
-cat /mnt/db/public/users/.info/primary_key
-cat /mnt/db/public/users/.info/schema.sql
-cat /mnt/db/public/users/.info/columns.json
-
-# Sort rows by column
-ls /mnt/db/public/users/.order/name/asc/
-
-# Read sorted row data
-cat /mnt/db/public/users/.order/name/asc/1/row.json
-
-# View indexes
-ls /mnt/db/public/users/.indexes/
-cat /mnt/db/public/users/.indexes/users_pkey
+openshell sandbox create --from pgmount \
+  -e PGMOUNT_DATABASE_URL="postgres://user:pass@db/myapp" \
+  -e PGMOUNT_WORKSPACE_ID="agent-42" \
+  -e PGMOUNT_WORKSPACE_CONFIG='{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}' \
+  -e ANTHROPIC_API_KEY="sk-ant-..." \
+  -- pgmount-start.sh claude
 ```
 
-## Migrations
+The entrypoint automatically creates the workspace (if new), mounts it at `/home/agent`, and sets `HOME=/home/agent` before launching the agent.
 
-On first mount, pgmount automatically creates an internal `_pgmount` schema in the target database with tables for audit logging and cache hints. Migrations are managed by [refinery](https://github.com/rust-db/refinery) and run before the FUSE mount is created.
+### What persists
 
-```
-_pgmount.schema_version      — migration tracking
-_pgmount.mount_log           — audit log of mount sessions (mount point, schemas, page size, version)
-_pgmount.cache_hints         — persistent cache hints (per schema/table)
-_pgmount.workspace_config    — workspace definitions (id, display name, JSONB config)
-_pgmount.workspace_files     — workspace file storage (path, content, metadata)
-```
+Everything Claude Code writes under `~/.claude/`:
 
-Each mount session is recorded in `mount_log`. To skip migrations (e.g., when the database user lacks CREATE privileges), use `--skip-migrations`.
+| Path | Content |
+|------|---------|
+| `~/.claude/memory/` | Remembered context across conversations |
+| `~/.claude/plans/` | Implementation plans |
+| `~/.claude/tasks/` | Task tracking |
+| `~/.claude/sessions/` | Conversation transcripts |
+| `~/.claude/settings.json` | User preferences |
+| `~/.claude.json` | Authentication state |
 
-The database user needs write access to the `_pgmount` schema even though the FUSE mount is read-only:
-
-```sql
-GRANT ALL ON SCHEMA _pgmount TO your_readonly_role;
-GRANT ALL ON ALL TABLES IN SCHEMA _pgmount TO your_readonly_role;
-```
+All stored as rows in `_pgmount.workspace_files` — one row per file, content in BYTEA.
 
 ## OpenShell Sandbox
 
-A pre-built sandbox for running AI agents (OpenClaw) with database access is available at `sandboxes/pgmount/`. See [sandboxes/pgmount/README.md](sandboxes/pgmount/README.md) for setup instructions.
+A pre-built container image for running AI agents with database access. See [sandboxes/pgmount/README.md](sandboxes/pgmount/README.md) for full documentation.
 
 ```bash
 openshell sandbox build pgmount
@@ -301,91 +220,50 @@ openshell sandbox create --from pgmount \
   -- pgmount-start.sh openclaw-start
 ```
 
-The sandbox mounts the database at `/db`, provides a Landlock security policy, and includes an agent skill (`pgmount-navigate`) that teaches the agent how to browse the filesystem.
+The sandbox mounts the database read-only at `/db` and optionally mounts a writable workspace at `/home/agent`. A Landlock security policy restricts filesystem access.
 
-## Architecture
+### Environment variables
 
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PGMOUNT_DATABASE_URL` | *(required)* | PostgreSQL connection string |
+| `PGMOUNT_SCHEMAS` | all | Comma-separated schema filter |
+| `PGMOUNT_PAGE_SIZE` | 1000 | Rows per page directory |
+| `PGMOUNT_CACHE_TTL` | 30 | Metadata cache TTL in seconds |
+| `PGMOUNT_STATEMENT_TIMEOUT` | 30 | SQL query timeout in seconds |
+| `PGMOUNT_WORKSPACE_ID` | *(optional)* | Enables workspace mount |
+| `PGMOUNT_WORKSPACE_MOUNT` | `/home/agent` | Workspace mount point |
+| `PGMOUNT_WORKSPACE_CONFIG` | `{}` | JSON config for auto_dirs/seed_files |
+
+## Migrations
+
+On first mount, pgmount creates an internal `_pgmount` schema for audit logging, cache hints, and workspace storage. Migrations are managed by [refinery](https://github.com/rust-db/refinery).
+
+The database user needs write access to `_pgmount`:
+
+```sql
+GRANT ALL ON SCHEMA _pgmount TO your_role;
+GRANT ALL ON ALL TABLES IN SCHEMA _pgmount TO your_role;
 ```
-pgmount/
-  crates/
-    pgmount/          # CLI binary
-    pgmount-core/     # Library
-      migrations/      # Refinery SQL migrations (V1–V4)
-      src/
-        cli/           # Clap command definitions (mount, workspace, etc.)
-        config/        # Connection string resolution, YAML config
-        db/            # Connection pool, SQL queries, and migrations
-          queries/     # Introspection, row access, indexes, stats, workspace
-        fs/            # FUSE filesystem implementations
-          nodes/       # Read-only node types: root, schema, table, page, row,
-                       #   column, info, export, indexes, filter, order
-          workspace.rs # Read-write WorkspaceFilesystem (FUSE impl)
-          workspace_inode.rs  # Path-based inode table
-        format/        # JSON, CSV, YAML serializers
-        mount/         # Mount registry
-  sandboxes/
-    pgmount/           # OpenShell sandbox definition
-```
 
-| Layer | Crate | Purpose |
-|-------|-------|---------|
-| FUSE | `fuser` 0.17 | Kernel filesystem interface |
-| PostgreSQL | `tokio-postgres` + `deadpool-postgres` | Async queries with connection pooling |
-| Async | `tokio` | Runtime for database operations |
-| CLI | `clap` v4 | Command-line argument parsing |
-| Caching | `dashmap` | Lock-free concurrent inode table and metadata cache |
-| Serialization | `serde_json`, `csv`, `serde_yml` | Row format output |
-| Errors | `thiserror` | Ergonomic error types with errno mapping |
-| Migrations | `refinery` | Embedded SQL migrations for `_pgmount` schema |
-| Logging | `tracing` | Structured, filterable logging |
-
-### Key design decisions
-
-**Pagination**: Rows are grouped into `page_N/` directories to bound memory usage and directory listing size. Each page contains up to `page_size` rows (default 1000). Export files are similarly paginated. Use `.filter/` for targeted access to specific rows without browsing pages.
-
-**Async bridge**: `fuser` callbacks run on OS threads; database calls are async. Each FUSE callback uses `tokio::runtime::Handle::block_on()` to execute async queries.
-
-**Inode allocation**: Lazy and deterministic within a mount session. A `NodeIdentity` enum describes every virtual node type. A `DashMap` ensures the same identity always maps to the same inode number.
-
-**File content**: `getattr` reports an estimated size (4096). On `open`, the full content is generated and cached in a file-handle map. `read` slices from this cache. If the file doesn't exist (e.g., nonexistent row), `open` returns ENOENT.
-
-**Workspace write-back buffering**: `WorkspaceFilesystem` loads file content into memory on `open()`, mutates the buffer on `write()`, and flushes back to PostgreSQL in a single `INSERT ... ON CONFLICT UPDATE` on `flush()`/`release()`. This avoids per-`write()` DB round-trips (the kernel sends many 4KB chunks).
-
-**Type handling**: All column values are cast to `::text` in SQL, avoiding Rust type-mapping issues with PostgreSQL types like NUMERIC, MONEY, or custom domains.
-
-**PK encoding**: Primary key values are percent-encoded in directory names so that characters like `/`, `,`, `=` don't break filesystem paths. Integer PKs appear as-is (no special characters to encode).
-
-**Statement timeout**: A configurable timeout (default 30s) prevents runaway queries from hanging the filesystem. Set via `--statement-timeout`.
+To skip migrations: `--skip-migrations`.
 
 ## Development
 
-All development runs inside Docker containers:
+All builds and tests run inside Docker containers:
 
 ```bash
-# Start the dev environment (Rust 1.85 + PostgreSQL 16)
-docker compose up -d
-
-# Build inside the container
-docker compose exec dev cargo build
-
-# Run Rust unit/integration tests (38 tests)
-docker compose exec dev cargo test -p pgmount-core
-
-# Run FUSE mount integration tests (119 assertions)
-docker compose exec -e PGPASSWORD=pgmount dev bash tests/test_fuse_mount.sh
-
-# Run clippy
-docker compose exec dev cargo clippy
-
-# Stop everything
-docker compose down
+docker compose up -d                                        # start dev + postgres
+docker compose exec dev cargo build                         # build
+docker compose exec dev cargo test -p pgmount-core          # run tests
+docker compose exec -e PGPASSWORD=pgmount dev bash tests/test_fuse_mount.sh  # FUSE tests
+docker compose exec dev cargo clippy                        # lint
+docker compose down                                         # stop
 ```
-
-### Docker Compose services
 
 | Service | Description |
 |---------|-------------|
-| `dev` | Rust 1.85 with FUSE3, mounted with `/dev/fuse` and `SYS_ADMIN` capability |
+| `dev` | Rust 1.85 with FUSE3, `/dev/fuse`, `SYS_ADMIN` |
 | `postgres` | PostgreSQL 16 (`pgmount:pgmount@postgres/testdb`) |
 
 ## License

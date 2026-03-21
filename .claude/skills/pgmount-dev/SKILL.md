@@ -9,7 +9,10 @@ argument-hint: [task description]
 
 # pgmount Development
 
-pgmount is a Rust project that mounts PostgreSQL databases as read-only FUSE virtual filesystems. Users browse schemas, tables, rows, and columns as directories and files.
+pgmount is a Rust project that mounts PostgreSQL databases as FUSE virtual filesystems. It has two filesystem implementations:
+
+1. **PgmountFilesystem** (read-only) — browse schemas, tables, rows, and columns as directories and files
+2. **WorkspaceFilesystem** (read-write) — persistent agent state stored in PostgreSQL, designed for Claude Code's `~/.claude/` directory
 
 ## Project Structure
 
@@ -25,34 +28,39 @@ pgmount/
 │       ├── migrations/                 # Refinery SQL migrations
 │       │   ├── V1__create_pgmount_schema.sql  # _pgmount schema + schema_version
 │       │   ├── V2__create_mount_log.sql       # Mount session audit log
-│       │   └── V3__create_cache_hints.sql     # Persistent cache hints
+│       │   ├── V3__create_cache_hints.sql     # Persistent cache hints
+│       │   └── V4__create_workspace_tables.sql # workspace_config + workspace_files
 │       ├── src/
 │       │   ├── lib.rs                  # Module declarations
 │       │   ├── error.rs                # FsError enum → fuser::Errno mapping
 │       │   ├── cli/                    # Clap v4 commands
 │       │   │   ├── mod.rs              # Cli struct, Commands enum, run()
 │       │   │   ├── mount.rs            # Mount subcommand (pool + migrations + fuser::mount2)
+│       │   │   ├── workspace.rs        # Workspace subcommands (create/mount/seed/list/delete)
 │       │   │   ├── unmount.rs          # fusermount -u wrapper
 │       │   │   ├── list.rs             # Reads /proc/mounts for pgmount entries
 │       │   │   └── version.rs          # Prints CARGO_PKG_VERSION
 │       │   ├── config/                 # Connection resolution
 │       │   │   ├── mod.rs
-│       │   │   ├── types.rs            # MountConfig (incl. page_size, statement_timeout_secs)
+│       │   │   ├── types.rs            # MountConfig, WorkspaceMountConfig
 │       │   │   └── connection.rs       # CLI arg > env var > ~/.pgmount/config.yml
 │       │   ├── db/                     # PostgreSQL layer
 │       │   │   ├── mod.rs
 │       │   │   ├── migrate.rs          # run_migrations() + log_mount_session() via refinery
 │       │   │   ├── pool.rs             # deadpool-postgres pool (max 16, statement timeout)
-│       │   │   ├── types.rs            # SchemaInfo, TableInfo, ColumnInfo, etc.
+│       │   │   ├── types.rs            # SchemaInfo, TableInfo, ColumnInfo, WorkspaceFile, etc.
 │       │   │   └── queries/
 │       │   │       ├── mod.rs          # Public quote_ident(), get_client()
 │       │   │       ├── introspection.rs # list_schemas/tables/columns, get_primary_key
 │       │   │       ├── rows.rs         # query_rows, list_rows, get_row_data, get_all_rows_as_text
 │       │   │       ├── indexes.rs      # list_indexes from pg_class/pg_index
-│       │   │       └── stats.rs        # Row count estimate + exact
+│       │   │       ├── stats.rs        # Row count estimate + exact
+│       │   │       └── workspace.rs    # Workspace CRUD, file ops, seeding, rename
 │       │   ├── fs/                     # FUSE filesystem
-│       │   │   ├── mod.rs              # PgmountFilesystem (impl fuser::Filesystem)
-│       │   │   ├── inode.rs            # InodeTable + NodeIdentity enum
+│       │   │   ├── mod.rs              # PgmountFilesystem (read-only, impl fuser::Filesystem)
+│       │   │   ├── workspace.rs        # WorkspaceFilesystem (read-write, impl fuser::Filesystem)
+│       │   │   ├── workspace_inode.rs  # Path-based inode table for workspaces
+│       │   │   ├── inode.rs            # InodeTable + NodeIdentity enum (read-only mount)
 │       │   │   ├── attr.rs             # FileAttr helpers (dir_attr, file_attr)
 │       │   │   ├── cache.rs            # MetadataCache with TTL
 │       │   │   └── nodes/              # One file per virtual node type
@@ -78,7 +86,8 @@ pgmount/
 │       │       ├── mod.rs
 │       │       └── registry.rs         # MountRegistry (DashMap tracking)
 │       └── tests/
-│           └── integration.rs          # 38 Rust integration tests
+│           ├── integration.rs          # Rust integration tests (read-only)
+│           └── workspace_integration.rs # Workspace DB operation tests
 ├── sandboxes/
 │   └── pgmount/                        # OpenShell sandbox for AI agents
 │       ├── Dockerfile                  # Multi-stage: build pgmount + extend openclaw base
@@ -128,8 +137,11 @@ Primary key values are percent-encoded in directory names using the `percent-enc
 ### Statement Timeout
 Configured via `--statement-timeout` (default 30s). Set at the PostgreSQL connection level via `-c statement_timeout=Ns` in connection options. Prevents runaway queries from hanging the FUSE filesystem.
 
+### WorkspaceFilesystem (read-write)
+Separate FUSE implementation in `fs/workspace.rs`. Stores opaque files by path in `_pgmount.workspace_files`. Uses `WorkspaceInodeTable` (path ↔ inode via DashMap) — simpler than `NodeIdentity`. Write-back buffering: `open()` loads from DB, `write()` mutates buffer, `flush()`/`release()` writes back in one query.
+
 ### Database Migrations
-Managed by `refinery` (embed_migrations! macro). SQL files live in `crates/pgmount-core/migrations/`. Migrations run automatically in `cli/mount.rs` after connection test, before FUSE mount — creating the `_pgmount` schema with `mount_log` and `cache_hints` tables. Each mount session is recorded via `migrate::log_mount_session()`. Skip with `--skip-migrations`.
+Managed by `refinery` (embed_migrations! macro). SQL files live in `crates/pgmount-core/migrations/` (V1–V4). Migrations run automatically in `cli/mount.rs` after connection test, before FUSE mount — creating the `_pgmount` schema with `mount_log`, `cache_hints`, `workspace_config`, and `workspace_files` tables. Skip with `--skip-migrations`.
 
 ## Development Workflow
 
