@@ -109,6 +109,12 @@ done
 
 echo "Workspace mounted at /home/agent (id=$WS_ID)"
 
+# --- Install skills into workspace ---
+
+if [ -d /etc/openeral/skills ] && [ -d /home/agent/.claude/skills ]; then
+    cp -rn /etc/openeral/skills/* /home/agent/.claude/skills/ 2>/dev/null || true
+fi
+
 # --- Hand off to user command ---
 
 exec "$@"

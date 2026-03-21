@@ -89,6 +89,28 @@ environment:
 
 Each workspace ID gets its own isolated home directory in PostgreSQL.
 
+## Skills
+
+openeral-shell includes a built-in skill at `~/.claude/skills/openeral-shell/SKILL.md` that teaches AI agents how to use the environment — browsing `/db/`, writing persistent files, filtering, exporting, etc. The skill is automatically copied into the workspace on first start.
+
+To add your own skills, place them in `openeral-shell/skills/` before building, or write them directly to `~/.claude/skills/` inside a running shell.
+
+## Running Tests
+
+From the repo root:
+
+```bash
+bash openeral-shell/tests/test_openeral_shell.sh
+```
+
+This builds the image, starts services, and runs assertions for:
+- Mounts (`/db` and `$HOME`)
+- Default directories (`.claude/*`, `.cache`, `.config`, `.local`, `.npm`)
+- File read/write/delete
+- `/db` is read-only
+- Persistence across `docker compose down`/`up`
+- PostgreSQL contains workspace data
+
 ## Docker Requirements
 
 The container needs FUSE support:

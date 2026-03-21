@@ -40,7 +40,10 @@ RUN mkdir -p /db /home/agent
 COPY openeral-shell/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Copy skills (available to agents inside the shell)
+COPY openeral-shell/skills/ /etc/openeral/skills/
+
 WORKDIR /home/agent
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["bash"]
+CMD ["sleep", "infinity"]
