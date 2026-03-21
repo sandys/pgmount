@@ -15,10 +15,8 @@ docker compose exec openeral-shell claude
 ## Quick Start (OpenShell)
 
 ```bash
-# Build the sandbox image (one time)
-docker build -t openshell-openeral-shell openeral-shell/
-# Or with a specific base image:
-# docker build -t openshell-openeral-shell --build-arg BASE_IMAGE=ghcr.io/nvidia/openshell-community/sandboxes/base:latest openeral-shell/
+# Build the sandbox image (one time, from repo root)
+docker build -t openshell-openeral-shell -f openeral-shell/Dockerfile .
 
 # Create and run
 openshell sandbox create --from openeral-shell \
