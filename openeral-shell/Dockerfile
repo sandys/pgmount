@@ -1,3 +1,6 @@
+# Base image for the runtime stage
+ARG BASE_IMAGE=ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+
 # Stage 1: Build openeral from source
 FROM rust:1.85-bookworm AS builder
 
@@ -15,21 +18,16 @@ COPY crates/ crates/
 RUN cargo build --release --bin openeral \
     && strip /build/target/release/openeral
 
-# Stage 2: Runtime shell
-FROM debian:bookworm-slim
+# Stage 2: Runtime — extends OpenShell base sandbox
+FROM ${BASE_IMAGE}
 
+USER root
+
+# Runtime deps for openeral (FUSE + PostgreSQL client lib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fuse3 \
     libpq5 \
-    bash \
-    curl \
-    git \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Claude Code (native installer — no Node.js needed)
-RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="${PATH}:/root/.local/bin"
 
 # Copy openeral binary
 COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
@@ -37,20 +35,22 @@ COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
 # Allow non-root FUSE mounts
 RUN echo "user_allow_other" >> /etc/fuse.conf
 
-# Create non-root user for Claude Code (refuses --dangerously-skip-permissions as root)
-RUN useradd -m -u 1000 -s /bin/bash agent
-
 # Create mount points
-RUN mkdir -p /db /home/agent && chown agent:agent /home/agent
+RUN mkdir -p /db /home/agent && chown sandbox:sandbox /home/agent
 
-# Copy entrypoint
-COPY openeral-shell/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Copy security policy
+COPY openeral-shell/policy.yaml /etc/openshell/policy.yaml
 
-# Copy skills (available to agents inside the shell)
-COPY openeral-shell/skills/ /etc/openeral/skills/
+# Copy startup script
+COPY openeral-shell/openeral-shell-start.sh /usr/local/bin/openeral-shell-start
+RUN chmod +x /usr/local/bin/openeral-shell-start
 
-WORKDIR /home/agent
+# Copy skills to standard OpenShell location
+COPY openeral-shell/skills/ /sandbox/.agents/skills/
 
-ENTRYPOINT ["entrypoint.sh"]
-CMD ["sleep", "infinity"]
+# Local config dir for Claude Code (avoids FUSE config watcher race)
+RUN mkdir -p /sandbox/.openeral-config && chown sandbox:sandbox /sandbox/.openeral-config
+
+USER sandbox
+
+ENTRYPOINT ["/bin/bash"]

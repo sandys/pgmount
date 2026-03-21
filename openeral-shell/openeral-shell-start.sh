@@ -2,13 +2,15 @@
 set -euo pipefail
 
 # =============================================================================
-# openeral-shell entrypoint
+# openeral-shell-start — Configure and start the persistent shell environment.
+# Designed for OpenShell sandboxes.
 #
-# Sets up a persistent shell environment with:
+# Usage:
+#   openshell sandbox create --from openeral-shell -- openeral-shell-start
+#
+# Sets up:
 #   /db         — read-only PostgreSQL database browsable as files
 #   /home/agent — read-write persistent home directory (backed by PostgreSQL)
-#
-# openeral is invisible infrastructure — users interact with a normal shell.
 # =============================================================================
 
 # --- Resolve database connection ---
@@ -22,11 +24,13 @@ fi
 if [ -z "$DB_URL" ]; then
     echo "ERROR: DATABASE_URL is not set." >&2
     echo "" >&2
-    echo "Option 1: Set it in docker-compose.yml under environment:" >&2
-    echo "  DATABASE_URL: \"host=your-host user=your-user password=your-pass dbname=your-db\"" >&2
+    echo "Via OpenShell:" >&2
+    echo "  openshell sandbox create --from openeral-shell \\" >&2
+    echo "    -e DATABASE_URL='postgres://user:pass@host/db' \\" >&2
+    echo "    -- openeral-shell-start" >&2
     echo "" >&2
-    echo "Option 2: Pass it directly:" >&2
-    echo "  docker compose exec -e DATABASE_URL='postgres://user:pass@host/db' openeral-shell bash" >&2
+    echo "Via Docker Compose:" >&2
+    echo "  Set DATABASE_URL in docker-compose.yml or .env" >&2
     exit 1
 fi
 
@@ -109,17 +113,11 @@ done
 
 echo "Workspace mounted at /home/agent (id=$WS_ID)"
 
-# --- Install skills into workspace ---
-
-if [ -d /etc/openeral/skills ] && [ -d /home/agent/.claude/skills ]; then
-    cp -rn /etc/openeral/skills/* /home/agent/.claude/skills/ 2>/dev/null || true
-fi
-
 # --- Configure Claude Code ---
 # Claude Code's config watcher races on FUSE mounts. Use a local directory
 # for .claude.json config, while /home/agent remains the persistent workspace.
 
-AGENT_LOCAL="/var/lib/agent"
+AGENT_LOCAL="/sandbox/.openeral-config"
 mkdir -p "$AGENT_LOCAL"
 if [ -f /home/agent/.claude.json ]; then
     cp /home/agent/.claude.json "$AGENT_LOCAL/.claude.json"
@@ -127,29 +125,24 @@ else
     echo '{}' > "$AGENT_LOCAL/.claude.json"
 fi
 
-# Make agent user own the local config dir
-if id agent >/dev/null 2>&1; then
-    chown -R agent:agent "$AGENT_LOCAL"
-fi
-
-# --- Write env file for the agent user ---
-# This ensures `docker compose exec` picks up the right env when running as agent.
-
-cat > /etc/openeral-env.sh <<ENVEOF
 export HOME="$AGENT_LOCAL"
-export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-export OPENERAL_DATABASE_URL="$DB_URL"
-ENVEOF
-
-# --- Hand off to user command ---
-# Run CMD as the 'agent' user (Claude Code refuses --dangerously-skip-permissions as root).
-# Use runuser which preserves the environment cleanly.
-
 cd /home/agent
-export HOME="$AGENT_LOCAL"
 
-if [ "$(id -u)" = "0" ] && id agent >/dev/null 2>&1; then
-    exec runuser -u agent -- "$@"
+echo ""
+echo "openeral-shell ready."
+echo "  Database: /db/"
+echo "  Home:     /home/agent/ (persistent)"
+echo ""
+
+# --- Hand off (drop privileges if running as root) ---
+
+if [ "$(id -u)" = "0" ] && id sandbox >/dev/null 2>&1; then
+    chown sandbox:sandbox "$AGENT_LOCAL" "$AGENT_LOCAL/.claude.json" 2>/dev/null || true
+    # Drop to sandbox user. Use su -p to preserve environment.
+    # Construct command string safely for su -c.
+    CMD=""
+    for arg in "$@"; do CMD="$CMD '$(echo "$arg" | sed "s/'/'\\\\''/g")'"; done
+    exec su -p -s /bin/bash sandbox -c "cd /home/agent; exec $CMD"
 else
     exec "$@"
 fi

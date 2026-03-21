@@ -1,3 +1,11 @@
+# Standalone Docker Compose for openeral-shell.
+#
+# For OpenShell native usage instead:
+#   openshell sandbox build openeral-shell
+#   openshell sandbox create --from openeral-shell \
+#     -e DATABASE_URL="postgres://user:pass@host/db" \
+#     -- openeral-shell-start
+
 services:
   postgres:
     image: postgres:16
@@ -29,8 +37,9 @@ services:
     environment:
       DATABASE_URL: "host=postgres user=openeral password=openeral dbname=openeral"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # WORKSPACE_ID: my-agent
-      # WORKSPACE_CONFIG: '{"auto_dirs":[".claude",".claude/memory"]}'
+    user: root
+    entrypoint: ["openeral-shell-start"]
+    command: ["sleep", "infinity"]
     stdin_open: true
     tty: true
 

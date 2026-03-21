@@ -1,0 +1,23 @@
+version: "1.0"
+name: openeral-shell
+description: Persistent shell with PostgreSQL database at /db and writable workspace at /home/agent
+
+extends: base
+
+filesystem:
+  read_only:
+    - /db
+    - /usr/local/bin/openeral
+    - /etc/fuse.conf
+  read_write:
+    - /sandbox
+    - /tmp
+    - /home/agent
+
+capabilities:
+  required:
+    - SYS_ADMIN
+
+devices:
+  required:
+    - /dev/fuse
