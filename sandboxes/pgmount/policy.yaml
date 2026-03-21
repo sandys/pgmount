@@ -1,0 +1,22 @@
+version: "1.0"
+name: pgmount
+description: OpenClaw sandbox with PostgreSQL mounted as read-only filesystem at /db
+
+extends: openclaw
+
+filesystem:
+  read_only:
+    - /db
+    - /usr/local/bin/pgmount
+    - /etc/fuse.conf
+  read_write:
+    - /sandbox
+    - /tmp
+
+capabilities:
+  required:
+    - SYS_ADMIN
+
+devices:
+  required:
+    - /dev/fuse

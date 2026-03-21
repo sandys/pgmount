@@ -1,6 +1,7 @@
 use clap::Args;
 use crate::config::connection::resolve_connection_string;
 use crate::config::types::MountConfig;
+use crate::db::migrate;
 use crate::db::pool::create_pool;
 use crate::error::FsError;
 use crate::fs::PgmountFilesystem;
@@ -39,6 +40,10 @@ pub struct MountArgs {
     /// Run in foreground (don't daemonize)
     #[arg(short, long)]
     pub foreground: bool,
+
+    /// Skip database migrations on startup
+    #[arg(long)]
+    pub skip_migrations: bool,
 }
 
 pub async fn execute(args: MountArgs) -> Result<(), FsError> {
@@ -62,6 +67,18 @@ pub async fn execute(args: MountArgs) -> Result<(), FsError> {
     client.execute("SELECT 1", &[]).await.map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
     drop(client);
     info!("Connection verified");
+
+    // Run database migrations (creates _pgmount schema and metadata tables)
+    if !args.skip_migrations {
+        migrate::run_migrations(&pool).await?;
+        migrate::log_mount_session(
+            &pool,
+            &config.mount_point,
+            config.schemas.as_deref(),
+            config.page_size,
+        )
+        .await?;
+    }
 
     let mount_point = args.mount_point.clone();
 

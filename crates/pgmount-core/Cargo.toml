@@ -25,6 +25,7 @@ dashmap = "6"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 percent-encoding = "2"
+refinery = { version = "0.8", features = ["tokio-postgres"] }
 
 [lints]
 workspace = true

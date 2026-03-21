@@ -22,12 +22,16 @@ pgmount/
 │   ├── pgmount/                        # Binary crate (CLI entry point)
 │   │   └── src/main.rs                 # Tokio main, tracing init, calls cli::run()
 │   └── pgmount-core/                   # Library crate (all logic)
+│       ├── migrations/                 # Refinery SQL migrations
+│       │   ├── V1__create_pgmount_schema.sql  # _pgmount schema + schema_version
+│       │   ├── V2__create_mount_log.sql       # Mount session audit log
+│       │   └── V3__create_cache_hints.sql     # Persistent cache hints
 │       ├── src/
 │       │   ├── lib.rs                  # Module declarations
 │       │   ├── error.rs                # FsError enum → fuser::Errno mapping
 │       │   ├── cli/                    # Clap v4 commands
 │       │   │   ├── mod.rs              # Cli struct, Commands enum, run()
-│       │   │   ├── mount.rs            # Mount subcommand (pool + fuser::mount2)
+│       │   │   ├── mount.rs            # Mount subcommand (pool + migrations + fuser::mount2)
 │       │   │   ├── unmount.rs          # fusermount -u wrapper
 │       │   │   ├── list.rs             # Reads /proc/mounts for pgmount entries
 │       │   │   └── version.rs          # Prints CARGO_PKG_VERSION
@@ -37,6 +41,7 @@ pgmount/
 │       │   │   └── connection.rs       # CLI arg > env var > ~/.pgmount/config.yml
 │       │   ├── db/                     # PostgreSQL layer
 │       │   │   ├── mod.rs
+│       │   │   ├── migrate.rs          # run_migrations() + log_mount_session() via refinery
 │       │   │   ├── pool.rs             # deadpool-postgres pool (max 16, statement timeout)
 │       │   │   ├── types.rs            # SchemaInfo, TableInfo, ColumnInfo, etc.
 │       │   │   └── queries/
@@ -73,7 +78,14 @@ pgmount/
 │       │       ├── mod.rs
 │       │       └── registry.rs         # MountRegistry (DashMap tracking)
 │       └── tests/
-│           └── integration.rs          # 35 Rust integration tests
+│           └── integration.rs          # 38 Rust integration tests
+├── sandboxes/
+│   └── pgmount/                        # OpenShell sandbox for AI agents
+│       ├── Dockerfile                  # Multi-stage: build pgmount + extend openclaw base
+│       ├── policy.yaml                 # Landlock filesystem + capability policy
+│       ├── pgmount-start.sh            # Entrypoint: starts pgmount, polls mount, execs agent
+│       ├── skills/pgmount-navigate/SKILL.md  # Agent skill for /db navigation
+│       └── README.md
 └── tests/
     └── test_fuse_mount.sh              # 119-assertion FUSE mount test suite
 ```
@@ -116,6 +128,9 @@ Primary key values are percent-encoded in directory names using the `percent-enc
 ### Statement Timeout
 Configured via `--statement-timeout` (default 30s). Set at the PostgreSQL connection level via `-c statement_timeout=Ns` in connection options. Prevents runaway queries from hanging the FUSE filesystem.
 
+### Database Migrations
+Managed by `refinery` (embed_migrations! macro). SQL files live in `crates/pgmount-core/migrations/`. Migrations run automatically in `cli/mount.rs` after connection test, before FUSE mount — creating the `_pgmount` schema with `mount_log` and `cache_hints` tables. Each mount session is recorded via `migrate::log_mount_session()`. Skip with `--skip-migrations`.
+
 ## Development Workflow
 
 **ALL builds and tests run inside Docker containers:**
@@ -127,7 +142,7 @@ docker compose up -d
 # Build
 docker compose exec dev cargo build
 
-# Run Rust tests (35 tests, uses dedicated rust_test schema)
+# Run Rust tests (38 tests, uses dedicated rust_test schema)
 docker compose exec dev cargo test -p pgmount-core
 
 # Run FUSE mount integration tests (119 assertions)
@@ -212,6 +227,7 @@ View { schema, view_name }
 | serde_json | 1 | JSON serialization |
 | csv | 1 | CSV serialization |
 | serde_yml | 0.0.12 | YAML serialization |
+| refinery | 0.8 | Embedded SQL migrations |
 | thiserror | 2 | Error type derivation |
 | tracing | 0.1 | Structured logging |
 | chrono | 0.4 | Date/time types |

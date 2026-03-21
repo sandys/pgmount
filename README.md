@@ -54,6 +54,8 @@ id,name,email,age,active
 - **Connection pooling** via deadpool-postgres (16 connections)
 - **Statement timeout** — configurable per-query timeout prevents hung filesystems (default 30s)
 - **Multiple schemas** — all non-system schemas mounted, or filter with `--schemas`
+- **Automatic migrations** — creates `_pgmount` internal schema on first mount for audit logging and cache hints (via refinery)
+- **OpenShell sandbox** — pre-built sandbox image for running AI agents with database access at `/db`
 
 ## Filesystem Layout
 
@@ -145,6 +147,7 @@ Options:
       --page-size <N>                   Max rows per page directory [default: 1000]
       --statement-timeout <SECONDS>     SQL statement timeout [default: 30]
       --read-only <BOOL>                Mount read-only [default: true]
+      --skip-migrations                 Skip automatic database migrations
   -f, --foreground                      Run in foreground
 ```
 
@@ -233,6 +236,38 @@ ls /mnt/db/public/users/.indexes/
 cat /mnt/db/public/users/.indexes/users_pkey
 ```
 
+## Migrations
+
+On first mount, pgmount automatically creates an internal `_pgmount` schema in the target database with tables for audit logging and cache hints. Migrations are managed by [refinery](https://github.com/rust-db/refinery) and run before the FUSE mount is created.
+
+```
+_pgmount.schema_version   — migration tracking
+_pgmount.mount_log        — audit log of mount sessions (mount point, schemas, page size, version)
+_pgmount.cache_hints      — persistent cache hints (per schema/table)
+```
+
+Each mount session is recorded in `mount_log`. To skip migrations (e.g., when the database user lacks CREATE privileges), use `--skip-migrations`.
+
+The database user needs write access to the `_pgmount` schema even though the FUSE mount is read-only:
+
+```sql
+GRANT ALL ON SCHEMA _pgmount TO your_readonly_role;
+GRANT ALL ON ALL TABLES IN SCHEMA _pgmount TO your_readonly_role;
+```
+
+## OpenShell Sandbox
+
+A pre-built sandbox for running AI agents (OpenClaw) with database access is available at `sandboxes/pgmount/`. See [sandboxes/pgmount/README.md](sandboxes/pgmount/README.md) for setup instructions.
+
+```bash
+openshell sandbox build pgmount
+openshell sandbox create --from pgmount \
+  -e PGMOUNT_DATABASE_URL="postgres://readonly:pass@db.example.com/myapp" \
+  -- pgmount-start.sh openclaw-start
+```
+
+The sandbox mounts the database at `/db`, provides a Landlock security policy, and includes an agent skill (`pgmount-navigate`) that teaches the agent how to browse the filesystem.
+
 ## Architecture
 
 ```
@@ -240,16 +275,19 @@ pgmount/
   crates/
     pgmount/          # CLI binary
     pgmount-core/     # Library
+      migrations/      # Refinery SQL migrations (V1, V2, V3)
       src/
         cli/           # Clap command definitions
         config/        # Connection string resolution, YAML config
-        db/            # Connection pool and SQL queries
+        db/            # Connection pool, SQL queries, and migrations
           queries/     # Introspection, row access, indexes, stats
         fs/            # FUSE filesystem implementation
           nodes/       # Node types: root, schema, table, page, row, column,
                        #   info, export, indexes, filter, order
         format/        # JSON, CSV, YAML serializers
         mount/         # Mount registry
+  sandboxes/
+    pgmount/           # OpenShell sandbox definition
 ```
 
 | Layer | Crate | Purpose |
@@ -261,6 +299,7 @@ pgmount/
 | Caching | `dashmap` | Lock-free concurrent inode table and metadata cache |
 | Serialization | `serde_json`, `csv`, `serde_yml` | Row format output |
 | Errors | `thiserror` | Ergonomic error types with errno mapping |
+| Migrations | `refinery` | Embedded SQL migrations for `_pgmount` schema |
 | Logging | `tracing` | Structured, filterable logging |
 
 ### Key design decisions
@@ -290,7 +329,7 @@ docker compose up -d
 # Build inside the container
 docker compose exec dev cargo build
 
-# Run Rust unit/integration tests (35 tests)
+# Run Rust unit/integration tests (38 tests)
 docker compose exec dev cargo test -p pgmount-core
 
 # Run FUSE mount integration tests (119 assertions)

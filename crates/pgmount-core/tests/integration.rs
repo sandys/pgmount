@@ -1,3 +1,4 @@
+use pgmount_core::db::migrate;
 use pgmount_core::db::pool::create_pool;
 use pgmount_core::db::queries::{introspection, rows, stats, indexes};
 use pgmount_core::fs::cache::MetadataCache;
@@ -441,4 +442,112 @@ async fn test_exact_row_count_nonexistent_table() {
     let pool = get_pool().await;
     let result = stats::get_exact_row_count(&pool, S, "nonexistent_xyz").await;
     assert!(result.is_err());
+}
+
+// --- Migration tests ---
+
+#[tokio::test]
+async fn test_migrations_create_pgmount_schema() {
+    let pool = get_pool().await;
+
+    // Clean up from any previous test runs (including refinery's tracking table)
+    let client = pool.get().await.unwrap();
+    client.batch_execute("
+        DROP SCHEMA IF EXISTS _pgmount CASCADE;
+        DROP TABLE IF EXISTS public.refinery_schema_history;
+    ").await.unwrap();
+    drop(client);
+
+    // Run migrations
+    migrate::run_migrations(&pool).await.unwrap();
+
+    // Verify _pgmount schema exists
+    let client = pool.get().await.unwrap();
+    let rows = client
+        .query(
+            "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '_pgmount'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+
+    // Verify mount_log table exists
+    let rows = client
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = '_pgmount' AND table_name = 'mount_log'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+
+    // Verify cache_hints table exists
+    let rows = client
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = '_pgmount' AND table_name = 'cache_hints'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+}
+
+#[tokio::test]
+async fn test_migrations_idempotent() {
+    let pool = get_pool().await;
+
+    // Clean slate
+    let client = pool.get().await.unwrap();
+    client.batch_execute("
+        DROP SCHEMA IF EXISTS _pgmount CASCADE;
+        DROP TABLE IF EXISTS public.refinery_schema_history;
+    ").await.unwrap();
+    drop(client);
+
+    // Run migrations twice — second run should be a no-op
+    migrate::run_migrations(&pool).await.unwrap();
+    migrate::run_migrations(&pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_log_mount_session() {
+    let pool = get_pool().await;
+
+    // Clean slate, then run migrations fresh
+    let client = pool.get().await.unwrap();
+    client.batch_execute("
+        DROP SCHEMA IF EXISTS _pgmount CASCADE;
+        DROP TABLE IF EXISTS public.refinery_schema_history;
+    ").await.unwrap();
+    drop(client);
+
+    migrate::run_migrations(&pool).await.unwrap();
+
+    // Log a mount session
+    migrate::log_mount_session(&pool, "/db", Some(&["public".to_string()]), 1000)
+        .await
+        .unwrap();
+
+    // Verify the entry
+    let client = pool.get().await.unwrap();
+    let rows = client
+        .query("SELECT mount_point, schemas_filter, page_size, pgmount_version FROM _pgmount.mount_log", &[])
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+
+    let mount_point: &str = rows[0].get(0);
+    assert_eq!(mount_point, "/db");
+
+    let schemas: Option<Vec<String>> = rows[0].get(1);
+    assert_eq!(schemas, Some(vec!["public".to_string()]));
+
+    let page_size: i32 = rows[0].get(2);
+    assert_eq!(page_size, 1000);
+
+    let version: &str = rows[0].get(3);
+    assert!(!version.is_empty());
 }
