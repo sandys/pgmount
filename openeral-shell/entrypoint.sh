@@ -41,7 +41,6 @@ WS_NAME="${WORKSPACE_NAME:-$WS_ID}"
 DEFAULT_CONFIG='{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions",".claude/tasks",".claude/todos",".claude/skills",".cache",".local",".config",".npm"]}'
 WS_CONFIG="${WORKSPACE_CONFIG:-$DEFAULT_CONFIG}"
 
-export HOME=/home/agent
 TIMEOUT="${STARTUP_TIMEOUT:-15}"
 
 # --- Mount database at /db (read-only) ---
@@ -51,13 +50,14 @@ DB_PID=$!
 
 # --- Cleanup on exit ---
 
+WS_PID=""
 cleanup() {
     fusermount -u /home/agent 2>/dev/null || true
-    kill "$WS_PID" 2>/dev/null || true
+    [ -n "$WS_PID" ] && kill "$WS_PID" 2>/dev/null || true
     fusermount -u /db 2>/dev/null || true
     kill "$DB_PID" 2>/dev/null || true
     wait "$DB_PID" 2>/dev/null || true
-    wait "$WS_PID" 2>/dev/null || true
+    [ -n "$WS_PID" ] && wait "$WS_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -115,6 +115,41 @@ if [ -d /etc/openeral/skills ] && [ -d /home/agent/.claude/skills ]; then
     cp -rn /etc/openeral/skills/* /home/agent/.claude/skills/ 2>/dev/null || true
 fi
 
-# --- Hand off to user command ---
+# --- Configure Claude Code ---
+# Claude Code's config watcher races on FUSE mounts. Use a local directory
+# for .claude.json config, while /home/agent remains the persistent workspace.
 
-exec "$@"
+AGENT_LOCAL="/var/lib/agent"
+mkdir -p "$AGENT_LOCAL"
+if [ -f /home/agent/.claude.json ]; then
+    cp /home/agent/.claude.json "$AGENT_LOCAL/.claude.json"
+else
+    echo '{}' > "$AGENT_LOCAL/.claude.json"
+fi
+
+# Make agent user own the local config dir
+if id agent >/dev/null 2>&1; then
+    chown -R agent:agent "$AGENT_LOCAL"
+fi
+
+# --- Write env file for the agent user ---
+# This ensures `docker compose exec` picks up the right env when running as agent.
+
+cat > /etc/openeral-env.sh <<ENVEOF
+export HOME="$AGENT_LOCAL"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+export OPENERAL_DATABASE_URL="$DB_URL"
+ENVEOF
+
+# --- Hand off to user command ---
+# Run CMD as the 'agent' user (Claude Code refuses --dangerously-skip-permissions as root).
+# Use runuser which preserves the environment cleanly.
+
+cd /home/agent
+export HOME="$AGENT_LOCAL"
+
+if [ "$(id -u)" = "0" ] && id agent >/dev/null 2>&1; then
+    exec runuser -u agent -- "$@"
+else
+    exec "$@"
+fi
