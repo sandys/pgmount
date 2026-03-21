@@ -15,7 +15,12 @@ docker compose exec openeral-shell claude
 ## Quick Start (OpenShell)
 
 ```bash
-openshell sandbox build openeral-shell
+# Build the sandbox image (one time)
+docker build -t openshell-openeral-shell openeral-shell/
+# Or with a specific base image:
+# docker build -t openshell-openeral-shell --build-arg BASE_IMAGE=ghcr.io/nvidia/openshell-community/sandboxes/base:latest openeral-shell/
+
+# Create and run
 openshell sandbox create --from openeral-shell \
   -e DATABASE_URL="postgres://user:pass@host/db" \
   -e ANTHROPIC_API_KEY="sk-ant-..." \
