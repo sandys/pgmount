@@ -21,6 +21,12 @@ pub enum FsError {
     #[error("Read-only filesystem")]
     ReadOnlyFilesystem,
 
+    #[error("File exists")]
+    FileExists,
+
+    #[error("Directory not empty")]
+    DirectoryNotEmpty,
+
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
@@ -43,6 +49,8 @@ impl FsError {
             FsError::IsADirectory => Errno::EISDIR,
             FsError::InvalidArgument(_) => Errno::EINVAL,
             FsError::ReadOnlyFilesystem => Errno::EROFS,
+            FsError::FileExists => Errno::EEXIST,
+            FsError::DirectoryNotEmpty => Errno::ENOTEMPTY,
             FsError::IoError(_) => Errno::EIO,
             FsError::DatabaseError(_) => Errno::EIO,
             FsError::SerializationError(_) => Errno::EIO,

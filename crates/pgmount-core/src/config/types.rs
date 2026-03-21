@@ -26,6 +26,15 @@ pub struct MountConfig {
     pub statement_timeout_secs: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct WorkspaceMountConfig {
+    pub connection_string: String,
+    pub workspace_id: String,
+    pub mount_point: String,
+    pub display_name: Option<String>,
+    pub statement_timeout_secs: u64,
+}
+
 impl Default for MountConfig {
     fn default() -> Self {
         Self {

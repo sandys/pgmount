@@ -32,8 +32,8 @@ COPY --from=builder /build/target/release/pgmount /usr/local/bin/pgmount
 # Allow non-root FUSE mounts
 RUN echo "user_allow_other" >> /etc/fuse.conf
 
-# Create mount point
-RUN mkdir -p /db
+# Create mount points
+RUN mkdir -p /db /home/agent
 
 # Copy entrypoint and skills
 COPY sandboxes/pgmount/pgmount-start.sh /usr/local/bin/pgmount-start.sh

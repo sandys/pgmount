@@ -2,6 +2,7 @@ pub mod mount;
 pub mod unmount;
 pub mod list;
 pub mod version;
+pub mod workspace;
 
 use clap::{Parser, Subcommand};
 use crate::error::FsError;
@@ -23,6 +24,8 @@ pub enum Commands {
     List,
     /// Show version information
     Version,
+    /// Manage workspaces (create, mount, seed, list, delete)
+    Workspace(workspace::WorkspaceArgs),
 }
 
 pub async fn run() -> Result<(), FsError> {
@@ -35,5 +38,6 @@ pub async fn run() -> Result<(), FsError> {
             version::execute();
             Ok(())
         }
+        Commands::Workspace(args) => workspace::execute(args).await,
     }
 }

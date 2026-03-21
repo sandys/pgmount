@@ -12,6 +12,7 @@ filesystem:
   read_write:
     - /sandbox
     - /tmp
+    - /home/agent
 
 capabilities:
   required:

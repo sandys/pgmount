@@ -2,6 +2,8 @@ pub mod attr;
 pub mod cache;
 pub mod inode;
 pub mod nodes;
+pub mod workspace;
+pub mod workspace_inode;
 
 use std::ffi::OsStr;
 use std::time::Duration;
