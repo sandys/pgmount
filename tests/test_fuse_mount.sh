@@ -108,6 +108,9 @@ cleanup() {
     echo ""
     echo "--- Cleanup ---"
     fusermount -u "$MNT" 2>/dev/null || true
+    fusermount -u /tmp/openeral_fuse3_test 2>/dev/null || true
+    fusermount -u /tmp/openeral_fuse3_ws_test 2>/dev/null || true
+    fusermount -u /tmp/openeral_fuse3_consistency 2>/dev/null || true
     if [ -n "${MOUNT_PID:-}" ]; then
         wait "$MOUNT_PID" 2>/dev/null || true
     fi
@@ -570,6 +573,131 @@ assert_is_dir "$MNT/test_schema/products/page_1/1" "Integer PK '1' accessible in
 assert_is_dir "$MNT/test_schema/products/page_1/5" "Integer PK '5' accessible in page_1"
 # Composite integer PKs also have no special chars to encode
 assert_is_dir "$MNT/test_schema/order_items/page_1/order_id=1,item_id=1" "Composite integer PK accessible in page_1"
+echo ""
+
+# ---- mount.fuse3 Integration Tests ----
+
+# Ensure openeral is in PATH for mount.fuse3 to find it
+if ! command -v openeral &>/dev/null; then
+    ln -sf "$OPENERAL_BIN" /usr/local/bin/openeral
+fi
+
+echo "--- 19. mount.fuse3 Database Mount ---"
+FUSE3_MNT="/tmp/openeral_fuse3_test"
+mkdir -p "$FUSE3_MNT"
+
+# mount.fuse3 replaces its process with the FUSE daemon, so mount blocks.
+# Run in background, wait for mountpoint to appear.
+mount -t fuse.openeral "host=postgres user=pgmount password=pgmount dbname=testdb" "$FUSE3_MNT" -o ro,allow_other &
+FUSE3_PID=$!
+
+fuse3_ready=0
+for i in $(seq 1 10); do
+    if mountpoint -q "$FUSE3_MNT" 2>/dev/null; then
+        fuse3_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$fuse3_ready" -eq 1 ]; then
+    pass "mount.fuse3 database mount succeeded"
+
+    fuse3_schemas=$(ls "$FUSE3_MNT/" 2>/dev/null)
+    assert_contains "$fuse3_schemas" "public" "mount.fuse3: lists public schema"
+    assert_contains "$fuse3_schemas" "test_schema" "mount.fuse3: lists test_schema"
+
+    fuse3_name=$(cat "$FUSE3_MNT/test_schema/products/page_1/1/name" 2>/dev/null)
+    assert_eq "$fuse3_name" "Widget A" "mount.fuse3: read column value"
+
+    fuse3_json=$(cat "$FUSE3_MNT/test_schema/products/page_1/1/row.json" 2>/dev/null)
+    assert_contains "$fuse3_json" "Widget A" "mount.fuse3: row.json contains expected data"
+
+    fusermount -u "$FUSE3_MNT" 2>/dev/null
+    wait "$FUSE3_PID" 2>/dev/null || true
+    pass "mount.fuse3 database unmount succeeded"
+else
+    fail "mount.fuse3 database mount failed (not ready after 10s)"
+    kill "$FUSE3_PID" 2>/dev/null || true
+fi
+rmdir "$FUSE3_MNT" 2>/dev/null
+echo ""
+
+echo "--- 20. mount.fuse3 Workspace Mount ---"
+FUSE3_WS_MNT="/tmp/openeral_fuse3_ws_test"
+mkdir -p "$FUSE3_WS_MNT"
+
+OPENERAL_DATABASE_URL="host=postgres user=pgmount password=pgmount dbname=testdb" \
+    "$OPENERAL_BIN" workspace create fuse3-test --display-name "fuse3 test" --skip-migrations 2>/dev/null || true
+
+mount -t fuse.openeral \
+    "host=postgres user=pgmount password=pgmount dbname=testdb#workspace#fuse3-test" \
+    "$FUSE3_WS_MNT" -o rw,allow_other &
+FUSE3_WS_PID=$!
+
+fuse3_ws_ready=0
+for i in $(seq 1 10); do
+    if mountpoint -q "$FUSE3_WS_MNT" 2>/dev/null; then
+        fuse3_ws_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$fuse3_ws_ready" -eq 1 ]; then
+    pass "mount.fuse3 workspace mount succeeded"
+
+    echo "fuse3 workspace test" > "$FUSE3_WS_MNT/fuse3_test.txt" 2>/dev/null
+    fuse3_ws_content=$(cat "$FUSE3_WS_MNT/fuse3_test.txt" 2>/dev/null)
+    assert_eq "$fuse3_ws_content" "fuse3 workspace test" "mount.fuse3: workspace write+read"
+
+    fusermount -u "$FUSE3_WS_MNT" 2>/dev/null
+    wait "$FUSE3_WS_PID" 2>/dev/null || true
+    pass "mount.fuse3 workspace unmount succeeded"
+else
+    fail "mount.fuse3 workspace mount failed (not ready after 10s)"
+    kill "$FUSE3_WS_PID" 2>/dev/null || true
+fi
+rmdir "$FUSE3_WS_MNT" 2>/dev/null
+echo ""
+
+echo "--- 21. Consistency: Direct vs mount.fuse3 ---"
+FUSE3_CONS_MNT="/tmp/openeral_fuse3_consistency"
+mkdir -p "$FUSE3_CONS_MNT"
+
+mount -t fuse.openeral "host=postgres user=pgmount password=pgmount dbname=testdb" "$FUSE3_CONS_MNT" -o ro,allow_other &
+FUSE3_CONS_PID=$!
+
+fuse3_cons_ready=0
+for i in $(seq 1 10); do
+    if mountpoint -q "$FUSE3_CONS_MNT" 2>/dev/null; then
+        fuse3_cons_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$fuse3_cons_ready" -eq 1 ]; then
+    direct_schemas=$(ls "$MNT/" 2>/dev/null | sort)
+    fuse3_schemas=$(ls "$FUSE3_CONS_MNT/" 2>/dev/null | sort)
+    assert_eq "$direct_schemas" "$fuse3_schemas" "Consistency: schema listing matches"
+
+    direct_tables=$(ls "$MNT/test_schema/" 2>/dev/null | sort)
+    fuse3_tables=$(ls "$FUSE3_CONS_MNT/test_schema/" 2>/dev/null | sort)
+    assert_eq "$direct_tables" "$fuse3_tables" "Consistency: table listing matches"
+
+    direct_row=$(cat "$MNT/test_schema/products/page_1/1/row.json" 2>/dev/null)
+    fuse3_row=$(cat "$FUSE3_CONS_MNT/test_schema/products/page_1/1/row.json" 2>/dev/null)
+    assert_eq "$direct_row" "$fuse3_row" "Consistency: row.json content matches"
+
+    fusermount -u "$FUSE3_CONS_MNT" 2>/dev/null
+    wait "$FUSE3_CONS_PID" 2>/dev/null || true
+    pass "Consistency test cleanup succeeded"
+else
+    fail "Consistency test: mount.fuse3 mount failed (not ready after 10s)"
+    kill "$FUSE3_CONS_PID" 2>/dev/null || true
+fi
+rmdir "$FUSE3_CONS_MNT" 2>/dev/null
 echo ""
 
 # ---- Summary ----
