@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Rust check, lint, and format tasks
+
+["rust:check"]
+description = "Check all Rust crates for errors"
+run = "cargo check --workspace"
+hide = true
+
+["rust:lint"]
+description = "Lint Rust code with Clippy"
+run = "cargo clippy --workspace --all-targets"
+hide = true
+
+["rust:format"]
+description = "Format Rust code"
+run = "cargo fmt --all"
+hide = true
+
+["rust:format:check"]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+hide = true

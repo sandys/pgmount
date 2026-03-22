@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "openshell"
+dynamic = ["version"]
+description = "OpenShell is the safe, private runtime for autonomous AI agents. "
+license = "Apache-2.0"
+readme = "README.md"
+authors = [{ name = "NVIDIA Inc." }]
+requires-python = ">=3.12"
+dependencies = [
+    "cloudpickle>=3.0",
+    "grpcio>=1.60",
+    "protobuf>=4.25",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+]
+keywords = ["agent", "sandbox", "nvidia"]
+
+[project.urls]
+source = "https://github.com/NVIDIA/OpenShell"
+documentation = "https://docs.nvidia.com/openshell/latest/"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",
+    "ruff>=0.4",
+    "ty>=0.0.1a6",
+    "maturin>=1.5,<2.0",
+    "setuptools-scm>=8",
+    "grpcio-tools>=1.60",
+]
+docs = [
+    "sphinx<=7.5",
+    "myst-parser<=5",
+    "sphinx-copybutton<=0.6",
+    "sphinx-design",
+    "sphinx-autobuild",
+    "sphinxcontrib-mermaid",
+    "nvidia-sphinx-theme",
+]
+
+[tool.uv]
+# Don't try to install the root package with uv sync - use uv pip install . instead
+# This is needed because maturin bin packages don't install the binary with editable installs
+# (both `uv pip install -e .` and `maturin develop` skip binary installation)
+# Use `uv pip install .` (without -e) to install the openshell CLI binary
+package = false
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/openshell-cli/Cargo.toml"
+python-source = "python"
+module-name = "openshell"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+exclude = ["python/openshell/_proto"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "PTH", # flake8-use-pathlib
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    "E501", # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["openshell"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["python"]
+python_files = ["*_test.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+markers = [
+    "gpu: requires a GPU-capable gateway and GPU-enabled sandbox image",
+]
+
+[tool.coverage.run]
+source = ["python"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

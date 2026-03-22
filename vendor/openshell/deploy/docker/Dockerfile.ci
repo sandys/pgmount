@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.4
+
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# CI runner image with all development tools pre-installed
+# Rebuild triggered automatically when mise.toml or this file changes
+
+FROM nvcr.io/nvidia/base/ubuntu:noble-20251013
+
+ARG DOCKER_VERSION=29.3.0
+ARG BUILDX_VERSION=v0.32.1
+ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MISE_DATA_DIR=/opt/mise
+ENV MISE_CACHE_DIR=/opt/mise/cache
+ENV PATH="/opt/mise/shims:/root/.cargo/bin:/root/.local/bin:$PATH"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    openssh-client \
+    python3 \
+    python3-venv \
+    cmake \
+    socat \
+    unzip \
+    xz-utils \
+    jq \
+    rsync \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI and buildx plugin used by CI jobs
+RUN case "$TARGETARCH" in \
+      amd64) docker_arch=x86_64; buildx_arch=amd64 ;; \
+      arm64) docker_arch=aarch64; buildx_arch=arm64 ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_VERSION}.tgz" \
+    | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
+    && mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${buildx_arch}" \
+      -o /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+# Install GitHub CLI used by install.sh and CI jobs
+ARG GH_VERSION=2.74.1
+RUN case "$TARGETARCH" in \
+      amd64) gh_arch=amd64 ;; \
+      arm64) gh_arch=arm64 ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" \
+    | tar xz --strip-components=2 -C /usr/local/bin "gh_${GH_VERSION}_linux_${gh_arch}/bin/gh"
+
+# Install AWS CLI v2 used for ECR publishing
+RUN case "$TARGETARCH" in \
+      amd64) aws_arch=x86_64 ;; \
+      arm64) aws_arch=aarch64 ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip
+
+# Install mise
+RUN curl https://mise.run | sh
+
+# Copy mise.toml and task includes, then install all tools via mise
+COPY mise.toml /opt/mise/mise.toml
+COPY tasks/ /opt/mise/tasks/
+WORKDIR /opt/mise
+RUN --mount=type=secret,id=MISE_GITHUB_TOKEN \
+    export MISE_GITHUB_TOKEN="$(cat /run/secrets/MISE_GITHUB_TOKEN 2>/dev/null || true)" && \
+    mise trust /opt/mise/mise.toml && \
+    env -u RUSTC_WRAPPER mise install && \
+    /root/.cargo/bin/rustup component remove rust-docs || true && \
+    rm -rf /root/.rustup/toolchains/*/share/doc /root/.rustup/toolchains/*/share/man
+
+# Set working directory for CI jobs
+WORKDIR /builds

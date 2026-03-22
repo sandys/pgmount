@@ -1,0 +1,316 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Python development, build, lint, and format tasks
+
+["python:dev"]
+description = "Install Python package in development mode (builds CLI binary)"
+depends = ["python:proto"]
+run = "uv sync --group dev && uv pip install ."
+hide = true
+
+["build:python:wheel"]
+description = "Build Python wheel with CLI binary (native)"
+depends = ["python:proto"]
+run = "uv run maturin build --release"
+hide = true
+
+["python:build"]
+description = "Alias for build:python:wheel"
+depends = ["build:python:wheel"]
+hide = true
+
+["build:python:wheel:multiarch"]
+description = "Build Python wheels for Linux amd64/arm64 with buildx"
+depends = ["python:proto"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+sha256_16() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print substr($1, 1, 16)}'
+  else
+    shasum -a 256 "$1" | awk '{print substr($1, 1, 16)}'
+  fi
+}
+
+sha256_16_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print substr($1, 1, 16)}'
+  else
+    shasum -a 256 | awk '{print substr($1, 1, 16)}'
+  fi
+}
+
+PLATFORMS=${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}
+CARGO_VERSION=${OPENSHELL_CARGO_VERSION:-}
+if [ -z "$CARGO_VERSION" ] && [ -n "${CI:-}" ]; then
+  CARGO_VERSION=$(uv run python tasks/scripts/release.py get-version --cargo)
+fi
+
+LOCK_HASH=$(sha256_16 Cargo.lock)
+RUST_SCOPE=${RUST_TOOLCHAIN_SCOPE:-rustup-stable}
+CACHE_SCOPE_INPUT="v1|python-wheels|base|${LOCK_HASH}|${RUST_SCOPE}"
+CARGO_TARGET_CACHE_SCOPE=$(printf '%s' "$CACHE_SCOPE_INPUT" | sha256_16_stdin)
+
+VERSION_ARGS=(
+  --build-arg "CARGO_TARGET_CACHE_SCOPE=${CARGO_TARGET_CACHE_SCOPE}"
+  ${OPENSHELL_IMAGE_TAG:+--build-arg "OPENSHELL_IMAGE_TAG=${OPENSHELL_IMAGE_TAG}"}
+)
+
+if [ -n "$CARGO_VERSION" ]; then
+  VERSION_ARGS+=(--build-arg "OPENSHELL_CARGO_VERSION=${CARGO_VERSION}")
+fi
+
+if ! docker buildx inspect multiarch >/dev/null 2>&1; then
+  echo "Creating multi-platform buildx builder..."
+  docker buildx create --name multiarch --use --bootstrap
+else
+  docker buildx use multiarch
+fi
+
+mkdir -p target/wheels
+
+USE_LOCAL_CACHE=0
+if [ -z "${CI:-}" ] && docker buildx inspect multiarch 2>/dev/null | grep -q "Driver: docker-container"; then
+  USE_LOCAL_CACHE=1
+fi
+
+DOCKER_BUILD_CACHE_DIR=${DOCKER_BUILD_CACHE_DIR:-.cache/buildkit/python-wheels}
+if [ "$USE_LOCAL_CACHE" -eq 1 ]; then
+  mkdir -p "$DOCKER_BUILD_CACHE_DIR"
+fi
+
+for platform in ${PLATFORMS//,/ }; do
+  echo "Building wheel for ${platform}..."
+  CACHE_ARGS=()
+  if [ "$USE_LOCAL_CACHE" -eq 1 ]; then
+    PLATFORM_CACHE_KEY=$(printf '%s' "$platform" | tr '/' '-')
+    PLATFORM_CACHE_PATH="${DOCKER_BUILD_CACHE_DIR}/${PLATFORM_CACHE_KEY}"
+    mkdir -p "$PLATFORM_CACHE_PATH"
+    CACHE_ARGS=(
+      --cache-from "type=local,src=${PLATFORM_CACHE_PATH}"
+      --cache-to "type=local,dest=${PLATFORM_CACHE_PATH},mode=max"
+    )
+  fi
+
+  docker buildx build \
+    --builder multiarch \
+    --platform "${platform}" \
+    "${CACHE_ARGS[@]}" \
+    -f deploy/docker/Dockerfile.python-wheels \
+    --target wheels \
+    "${VERSION_ARGS[@]}" \
+    --output type=local,dest=target/wheels \
+    .
+done
+
+ls -la target/wheels/*.whl
+"""
+hide = true
+
+["python:build:multiarch"]
+description = "Alias for build:python:wheel:multiarch"
+depends = ["build:python:wheel:multiarch"]
+hide = true
+
+["build:python:wheel:macos"]
+description = "Build Python wheel for macOS arm64"
+depends = ["python:proto"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$(uname -s)" = "Darwin" ] && [ -z "${OPENSHELL_CARGO_VERSION:-}" ]; then
+  # Avoid failures when RUSTC_WRAPPER is set to an unresolved `sccache` binary.
+  if command -v sccache >/dev/null 2>&1; then
+    export RUSTC_WRAPPER="$(command -v sccache)"
+  else
+    unset RUSTC_WRAPPER || true
+  fi
+
+  mkdir -p target/wheels
+
+  rustup target add aarch64-apple-darwin
+
+  uv run maturin build --release --target aarch64-apple-darwin --out target/wheels
+else
+  echo "Building macOS wheel via Docker cross-toolchain"
+  mise run build:python:wheel:macos:docker
+fi
+
+ls -la target/wheels/*.whl
+"""
+hide = true
+
+["python:build:macos"]
+description = "Alias for build:python:wheel:macos"
+depends = ["build:python:wheel:macos"]
+hide = true
+
+["build:python:wheel:macos:docker"]
+description = "Build Python wheel for macOS arm64 from Docker"
+depends = ["python:proto"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+sha256_16() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print substr($1, 1, 16)}'
+  else
+    shasum -a 256 "$1" | awk '{print substr($1, 1, 16)}'
+  fi
+}
+
+sha256_16_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print substr($1, 1, 16)}'
+  else
+    shasum -a 256 | awk '{print substr($1, 1, 16)}'
+  fi
+}
+
+CARGO_VERSION=${OPENSHELL_CARGO_VERSION:-}
+OSXCROSS_IMAGE_REF=${OSXCROSS_IMAGE:-crazymax/osxcross:latest}
+if [ -z "$CARGO_VERSION" ] && [ -n "${CI:-}" ]; then
+  CARGO_VERSION=$(uv run python tasks/scripts/release.py get-version --cargo)
+fi
+
+LOCK_HASH=$(sha256_16 Cargo.lock)
+RUST_SCOPE=${RUST_TOOLCHAIN_SCOPE:-rustup-stable}
+CACHE_SCOPE_INPUT="v1|python-wheels-macos|base|${LOCK_HASH}|${RUST_SCOPE}"
+CARGO_TARGET_CACHE_SCOPE=$(printf '%s' "$CACHE_SCOPE_INPUT" | sha256_16_stdin)
+
+mkdir -p target/wheels
+
+docker build \
+  -f deploy/docker/Dockerfile.python-wheels-macos \
+  --target wheels \
+  --build-arg "OSXCROSS_IMAGE=${OSXCROSS_IMAGE_REF}" \
+  --build-arg "CARGO_TARGET_CACHE_SCOPE=${CARGO_TARGET_CACHE_SCOPE}" \
+  ${CARGO_VERSION:+--build-arg "OPENSHELL_CARGO_VERSION=${CARGO_VERSION}"} \
+  ${OPENSHELL_IMAGE_TAG:+--build-arg "OPENSHELL_IMAGE_TAG=${OPENSHELL_IMAGE_TAG}"} \
+  --output type=local,dest=target/wheels \
+  .
+
+ls -la target/wheels/*macosx*arm64.whl
+"""
+hide = true
+
+["python:build:macos:docker"]
+description = "Alias for build:python:wheel:macos:docker"
+depends = ["build:python:wheel:macos:docker"]
+hide = true
+
+["build:python:wheel:all"]
+description = "Build Python wheels for Linux and macOS"
+depends = ["build:python:wheel", "build:python:wheel:multiarch", "build:python:wheel:macos"]
+hide = true
+
+["python:build:all"]
+description = "Alias for build:python:wheel:all"
+depends = ["build:python:wheel:all"]
+hide = true
+
+["python:lint"]
+description = "Lint Python code with ruff"
+depends = ["python:proto"]
+env = { UV_NO_SYNC = "1" }
+run = "uv run ruff check {{vars.python_paths}}"
+hide = true
+
+["python:format"]
+description = "Format Python code with ruff"
+run = "uv run ruff format {{vars.python_paths}}"
+hide = true
+
+["python:format:check"]
+description = "Check Python formatting with ruff"
+run = "uv run ruff format --check {{vars.python_paths}}"
+hide = true
+
+["python:typecheck"]
+description = "Type check Python code with ty"
+depends = ["python:proto"]
+run = "uv run ty check {{vars.python_paths}}"
+hide = true
+
+["python:publish"]
+description = "Build and publish Python wheels"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+VERSION=$(uv run python tasks/scripts/release.py get-version --python)
+CARGO_VERSION=$(uv run python tasks/scripts/release.py get-version --cargo)
+OPENSHELL_CARGO_VERSION="$CARGO_VERSION" mise run build:python:wheel:all
+uv run python tasks/scripts/release.py python-publish --version "$VERSION"
+"""
+hide = true
+
+["python:publish:macos"]
+description = "Build and publish macOS arm64 Python wheel"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+VERSION=$(uv run python tasks/scripts/release.py get-version --python)
+CARGO_VERSION=$(uv run python tasks/scripts/release.py get-version --cargo)
+OPENSHELL_CARGO_VERSION="$CARGO_VERSION" mise run python:build:macos
+uv run python tasks/scripts/release.py python-publish --version "$VERSION" --wheel-glob "*macosx*arm64.whl"
+"""
+hide = true
+
+["python:proto"]
+description = "Generate Python protobuf stubs from .proto files"
+env = { UV_NO_SYNC = "1" }
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+uv run python -m grpc_tools.protoc \
+  -Iproto \
+  --python_out=python/openshell/_proto \
+  --pyi_out=python/openshell/_proto \
+  --grpc_python_out=python/openshell/_proto \
+  proto/inference.proto \
+  proto/openshell.proto \
+  proto/datamodel.proto \
+  proto/sandbox.proto
+# Fix absolute imports in generated stubs to use package-relative imports
+uv run python - <<'PY'
+from pathlib import Path
+import re
+
+line_rewrites = {
+    "python/openshell/_proto/inference_pb2_grpc.py": [
+        (r"^import inference_pb2 as inference__pb2$", "from . import inference_pb2 as inference__pb2"),
+    ],
+    "python/openshell/_proto/openshell_pb2_grpc.py": [
+        (r"^import openshell_pb2 as openshell__pb2$", "from . import openshell_pb2 as openshell__pb2"),
+        (r"^import sandbox_pb2 as sandbox__pb2$", "from . import sandbox_pb2 as sandbox__pb2"),
+    ],
+    "python/openshell/_proto/openshell_pb2.py": [
+        (r"^import datamodel_pb2 as datamodel__pb2$", "from . import datamodel_pb2 as datamodel__pb2"),
+        (r"^import sandbox_pb2 as sandbox__pb2$", "from . import sandbox_pb2 as sandbox__pb2"),
+    ],
+    "python/openshell/_proto/datamodel_pb2.py": [
+        (r"^import sandbox_pb2 as sandbox__pb2$", "from . import sandbox_pb2 as sandbox__pb2"),
+    ],
+    "python/openshell/_proto/datamodel_pb2_grpc.py": [
+        (r"^import datamodel_pb2 as datamodel__pb2$", "from . import datamodel_pb2 as datamodel__pb2"),
+    ],
+    "python/openshell/_proto/sandbox_pb2_grpc.py": [
+        (r"^import sandbox_pb2 as sandbox__pb2$", "from . import sandbox_pb2 as sandbox__pb2"),
+    ],
+}
+
+for path, rules in line_rewrites.items():
+    file_path = Path(path)
+    text = file_path.read_text()
+    text = text.replace("from . from . import", "from . import")
+    for pattern, replacement in rules:
+        text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+    file_path.write_text(text)
+PY
+"""
+hide = true

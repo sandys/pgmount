@@ -1,0 +1,422 @@
+name: Release Tag
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to release (e.g. v0.0.4)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+# Resolve the tag once: prefer the workflow_dispatch input, fall back to the
+# push-event ref.  Every job references this via env.RELEASE_TAG.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Compute all versions once at the start to avoid git-describe race conditions
+  # ---------------------------------------------------------------------------
+  compute-versions:
+    name: Compute Versions
+    runs-on: build-amd64
+    timeout-minutes: 5
+    container:
+      image: ghcr.io/nvidia/openshell/ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      python_version: ${{ steps.v.outputs.python }}
+      cargo_version: ${{ steps.v.outputs.cargo }}
+      # Semver without 'v' prefix (e.g. 0.6.0), used for image tags and release body
+      semver: ${{ steps.v.outputs.semver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Compute all versions
+        id: v
+        run: |
+          set -euo pipefail
+          echo "python=$(uv run python tasks/scripts/release.py get-version --python)" >> "$GITHUB_OUTPUT"
+          echo "cargo=$(uv run python tasks/scripts/release.py get-version --cargo)" >> "$GITHUB_OUTPUT"
+          echo "semver=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+  build-gateway:
+    needs: [compute-versions]
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      component: gateway
+      cargo-version: ${{ needs.compute-versions.outputs.cargo_version }}
+
+  build-cluster:
+    needs: [compute-versions]
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      component: cluster
+      cargo-version: ${{ needs.compute-versions.outputs.cargo_version }}
+
+  e2e:
+    needs: [build-gateway, build-cluster]
+    uses: ./.github/workflows/e2e-test.yml
+    with:
+      image-tag: ${{ github.sha }}
+      runner: build-arm64
+
+  tag-ghcr-release:
+    name: Tag GHCR Images for Release
+    needs: [compute-versions, build-gateway, build-cluster, e2e]
+    runs-on: build-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Tag images with version and latest
+        run: |
+          set -euo pipefail
+          REGISTRY="ghcr.io/nvidia/openshell"
+          VERSION="${{ needs.compute-versions.outputs.semver }}"
+          for component in gateway cluster; do
+            echo "Tagging ${REGISTRY}/${component}:${{ github.sha }} as ${VERSION} and latest..."
+            docker buildx imagetools create \
+              --prefer-index=false \
+              -t "${REGISTRY}/${component}:${VERSION}" \
+              "${REGISTRY}/${component}:${{ github.sha }}"
+            docker buildx imagetools create \
+              --prefer-index=false \
+              -t "${REGISTRY}/${component}:latest" \
+              "${REGISTRY}/${component}:${{ github.sha }}"
+          done
+
+  build-python-wheels:
+    name: Stage Python Wheels
+    needs: [compute-versions]
+    runs-on: build-amd64
+    timeout-minutes: 120
+    outputs:
+      wheel_version: ${{ needs.compute-versions.outputs.python_version }}
+      wheel_filenames: ${{ steps.filenames.outputs.wheel_filenames }}
+    container:
+      image: ghcr.io/nvidia/openshell/ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --privileged
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+    env:
+      MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SCCACHE_MEMCACHED_ENDPOINT: ${{ vars.SCCACHE_MEMCACHED_ENDPOINT }}
+      OPENSHELL_IMAGE_TAG: ${{ needs.compute-versions.outputs.semver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Sync Python dependencies
+        run: uv sync
+
+      - name: Build Python wheels
+        run: |
+          set -euo pipefail
+          OPENSHELL_CARGO_VERSION="${{ needs.compute-versions.outputs.cargo_version }}" mise run python:build:multiarch
+          OPENSHELL_CARGO_VERSION="${{ needs.compute-versions.outputs.cargo_version }}" mise run python:build:macos
+          ls -la target/wheels/*.whl
+
+      - name: Capture wheel filenames
+        id: filenames
+        run: |
+          set -euo pipefail
+          WHEEL_FILENAMES=$(ls target/wheels/*.whl | xargs -n1 basename | paste -sd, -)
+          echo "wheel_filenames=${WHEEL_FILENAMES}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: target/wheels/*.whl
+          retention-days: 5
+
+  # ---------------------------------------------------------------------------
+  # Build CLI binaries (Linux musl — static, native on each arch)
+  # ---------------------------------------------------------------------------
+  build-cli-linux:
+    name: Build CLI (Linux ${{ matrix.arch }})
+    needs: [compute-versions]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: build-amd64
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: build-arm64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/nvidia/openshell/ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --privileged
+    env:
+      MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SCCACHE_MEMCACHED_ENDPOINT: ${{ vars.SCCACHE_MEMCACHED_ENDPOINT }}
+      OPENSHELL_IMAGE_TAG: ${{ needs.compute-versions.outputs.semver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Install tools
+        run: mise install
+
+      - name: Cache Rust target and registry
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: cli-musl-${{ matrix.arch }}
+          cache-directories: .cache/sccache
+          cache-targets: "true"
+
+      - name: Install musl toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends musl-tools
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Add Rust musl target
+        run: mise x -- rustup target add ${{ matrix.target }}
+
+      - name: Scope workspace to CLI crates
+        run: |
+          set -euo pipefail
+          # Remove workspace members that are not needed for openshell-cli.
+          # This avoids Cargo feature-unification pulling in aws-lc-sys (via
+          # russh in openshell-sandbox / openshell-server).
+          sed -i 's|members = \["crates/\*"\]|members = ["crates/openshell-cli", "crates/openshell-core", "crates/openshell-bootstrap", "crates/openshell-policy", "crates/openshell-providers", "crates/openshell-tui"]|' Cargo.toml
+
+      - name: Patch workspace version
+        if: needs.compute-versions.outputs.cargo_version != ''
+        run: |
+          set -euo pipefail
+          sed -i -E '/^\[workspace\.package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*".*"/version = "'"${{ needs.compute-versions.outputs.cargo_version }}"'"/}' Cargo.toml
+
+      - name: Build ${{ matrix.target }}
+        run: mise x -- cargo build --release --target ${{ matrix.target }} -p openshell-cli
+
+      - name: sccache stats
+        if: always()
+        run: mise x -- sccache --show-stats
+
+      - name: Package binary
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar -czf artifacts/openshell-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release openshell
+          ls -lh artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          path: artifacts/*.tar.gz
+          retention-days: 5
+
+  # ---------------------------------------------------------------------------
+  # Build CLI binary (macOS aarch64 via osxcross)
+  # ---------------------------------------------------------------------------
+  build-cli-macos:
+    name: Build CLI (macOS)
+    needs: [compute-versions]
+    runs-on: build-amd64
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/nvidia/openshell/ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --privileged
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+    env:
+      MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SCCACHE_MEMCACHED_ENDPOINT: ${{ vars.SCCACHE_MEMCACHED_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Build macOS binary via Docker
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file deploy/docker/Dockerfile.cli-macos \
+            --build-arg OPENSHELL_CARGO_VERSION="${{ needs.compute-versions.outputs.cargo_version }}" \
+            --build-arg OPENSHELL_IMAGE_TAG="${{ needs.compute-versions.outputs.semver }}" \
+            --build-arg CARGO_TARGET_CACHE_SCOPE="${{ github.sha }}" \
+            --target binary \
+            --output type=local,dest=out/ \
+            .
+
+      - name: Package binary
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar -czf artifacts/openshell-aarch64-apple-darwin.tar.gz \
+            -C out openshell
+          ls -lh artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-macos
+          path: artifacts/*.tar.gz
+          retention-days: 5
+
+  # ---------------------------------------------------------------------------
+  # Create a tagged GitHub Release with CLI binaries and wheels
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release
+    needs: [compute-versions, build-cli-linux, build-cli-macos, build-python-wheels, tag-ghcr-release]
+    runs-on: build-amd64
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download all CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: release/
+          merge-multiple: true
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels
+          path: release/
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum *.tar.gz *.whl > openshell-checksums-sha256.txt
+          cat openshell-checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OpenShell ${{ env.RELEASE_TAG }}
+          prerelease: false
+          tag_name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          body: |
+            ## OpenShell ${{ env.RELEASE_TAG }}
+
+            ### Quick install
+
+            ```bash
+            curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | OPENSHELL_VERSION=${{ env.RELEASE_TAG }} sh
+            ```
+
+          files: |
+            release/openshell-x86_64-unknown-linux-musl.tar.gz
+            release/openshell-aarch64-unknown-linux-musl.tar.gz
+            release/openshell-aarch64-apple-darwin.tar.gz
+            release/*.whl
+            release/openshell-checksums-sha256.txt
+
+  trigger-wheel-publish:
+    name: Trigger Wheel Publish
+    needs: [compute-versions, build-python-wheels, release]
+    runs-on: [self-hosted, nv]
+    timeout-minutes: 10
+    steps:
+      - name: Trigger GitLab CI
+        env:
+          GITLAB_CI_TRIGGER_TOKEN: ${{ secrets.GITLAB_CI_TRIGGER_TOKEN }}
+          GITLAB_CI_TRIGGER_URL: ${{ secrets.GITLAB_CI_TRIGGER_URL }}
+          RELEASE_VERSION: ${{ needs.compute-versions.outputs.python_version }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          WHEEL_FILENAMES: ${{ needs.build-python-wheels.outputs.wheel_filenames }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WHEEL_FILENAMES}" ]; then
+            echo "No wheel filenames provided by build job" >&2
+            exit 1
+          fi
+
+          response=$(curl -X POST \
+            --fail \
+            --silent \
+            --show-error \
+            -F "token=${GITLAB_CI_TRIGGER_TOKEN}" \
+            -F "ref=main" \
+            -F "variables[PIPELINE_ACTION]=publish_wheels" \
+            -F "variables[GITHUB_REPOSITORY]=${GITHUB_REPOSITORY}" \
+            -F "variables[COMMIT_SHA]=${GITHUB_SHA}" \
+            -F "variables[RELEASE_TAG]=${RELEASE_TAG}" \
+            -F "variables[RELEASE_VERSION]=${RELEASE_VERSION}" \
+            -F "variables[RELEASE_KIND]=stable" \
+            -F "variables[WHEEL_FILENAMES]=${WHEEL_FILENAMES}" \
+            "${GITLAB_CI_TRIGGER_URL}")
+          pipeline_id=$(printf '%s' "$response" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+          pipeline_status=$(printf '%s' "$response" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+          echo "Triggered GitLab pipeline ${pipeline_id:-unknown} with status=${pipeline_status:-unknown}"

@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal sandbox policy fixture for OPA engine tests.
+# Covers the network policies, filesystem, and process config
+# exercised by opa.rs unit tests.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  claude_code:
+    name: claude_code
+    endpoints:
+      - { host: api.anthropic.com, port: 443 }
+      - { host: statsig.anthropic.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/node }
+
+  github_ssh_over_https:
+    name: github-ssh-over-https
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: "/**/info/refs*"
+          - allow:
+              method: POST
+              path: "/**/git-upload-pack"
+    binaries:
+      - { path: /usr/bin/git }
+
+  copilot:
+    name: copilot
+    endpoints:
+      - { host: github.com, port: 443 }
+      - { host: api.github.com, port: 443 }
+      - { host: api.githubcopilot.com, port: 443 }
+      - { host: api.individual.githubcopilot.com, port: 443 }
+      - { host: api.business.githubcopilot.com, port: 443 }
+      - { host: api.enterprise.githubcopilot.com, port: 443 }
+      - { host: copilot-proxy.githubusercontent.com, port: 443 }
+      - { host: copilot-telemetry.githubusercontent.com, port: 443 }
+      - { host: default.exp-tas.com, port: 443 }
+      - { host: origin-tracker.githubusercontent.com, port: 443 }
+      - { host: release-assets.githubusercontent.com, port: 443 }
+    binaries:
+      - { path: "/usr/lib/node_modules/@github/copilot/node_modules/@github/**/copilot" }
+      - { path: /usr/local/bin/copilot }
+      - { path: "/home/*/.local/bin/copilot" }
+      - { path: /usr/bin/node }
+
+  gitlab:
+    name: gitlab
+    endpoints:
+      - { host: gitlab.com, port: 443 }
+    binaries:
+      - { path: /usr/bin/glab }

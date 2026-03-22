@@ -1,0 +1,163 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "openshell.fullname" . }}
+  labels:
+    {{- include "openshell.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "openshell.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "openshell.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "openshell.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.podLifecycle.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "openshell.serviceAccountName" . }}
+      {{- if .Values.server.hostGatewayIP }}
+      hostAliases:
+        - ip: {{ .Values.server.hostGatewayIP | quote }}
+          hostnames:
+            - host.docker.internal
+            - host.openshell.internal
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --port
+            - {{ .Values.service.port | quote }}
+            - --log-level
+            - {{ .Values.server.logLevel }}
+            - --db-url
+            - {{ .Values.server.dbUrl | quote }}
+          env:
+            - name: OPENSHELL_SANDBOX_NAMESPACE
+              value: {{ .Values.server.sandboxNamespace | quote }}
+            - name: OPENSHELL_SANDBOX_IMAGE
+              value: {{ .Values.server.sandboxImage | quote }}
+            {{- if .Values.server.sandboxImagePullPolicy }}
+            - name: OPENSHELL_SANDBOX_IMAGE_PULL_POLICY
+              value: {{ .Values.server.sandboxImagePullPolicy | quote }}
+            {{- end }}
+            - name: OPENSHELL_GRPC_ENDPOINT
+              value: {{ if .Values.server.disableTls }}{{ .Values.server.grpcEndpoint | replace "https://" "http://" | quote }}{{ else }}{{ .Values.server.grpcEndpoint | quote }}{{ end }}
+            {{- if .Values.server.sshGatewayHost }}
+            - name: OPENSHELL_SSH_GATEWAY_HOST
+              value: {{ .Values.server.sshGatewayHost | quote }}
+            {{- end }}
+            {{- if .Values.server.sshGatewayPort }}
+            - name: OPENSHELL_SSH_GATEWAY_PORT
+              value: {{ .Values.server.sshGatewayPort | quote }}
+            {{- end }}
+            {{- if .Values.server.hostGatewayIP }}
+            - name: OPENSHELL_HOST_GATEWAY_IP
+              value: {{ .Values.server.hostGatewayIP | quote }}
+            {{- end }}
+            - name: OPENSHELL_SSH_HANDSHAKE_SECRET
+              value: {{ required "server.sshHandshakeSecret is required" .Values.server.sshHandshakeSecret | quote }}
+            {{- if .Values.server.disableTls }}
+            - name: OPENSHELL_DISABLE_TLS
+              value: "true"
+            {{- else }}
+            - name: OPENSHELL_TLS_CERT
+              value: /etc/openshell-tls/server/tls.crt
+            - name: OPENSHELL_TLS_KEY
+              value: /etc/openshell-tls/server/tls.key
+            - name: OPENSHELL_TLS_CLIENT_CA
+              value: /etc/openshell-tls/client-ca/ca.crt
+            - name: OPENSHELL_CLIENT_TLS_SECRET_NAME
+              value: {{ .Values.server.tls.clientTlsSecretName | quote }}
+            {{- if .Values.server.disableGatewayAuth }}
+            - name: OPENSHELL_DISABLE_GATEWAY_AUTH
+              value: "true"
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: openshell-data
+              mountPath: /var/openshell
+            {{- if not .Values.server.disableTls }}
+            - name: tls-cert
+              mountPath: /etc/openshell-tls/server
+              readOnly: true
+            - name: tls-client-ca
+              mountPath: /etc/openshell-tls/client-ca
+              readOnly: true
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        {{- if not .Values.server.disableTls }}
+        - name: tls-cert
+          secret:
+            secretName: {{ .Values.server.tls.certSecretName }}
+        - name: tls-client-ca
+          secret:
+            secretName: {{ .Values.server.tls.clientCaSecretName }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: openshell-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
