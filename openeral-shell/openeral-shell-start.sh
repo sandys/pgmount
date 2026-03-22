@@ -5,13 +5,10 @@ set -euo pipefail
 # openeral-shell-start — Configure and start the persistent shell environment.
 # Designed for OpenShell sandboxes.
 #
-# Usage (OpenShell):
+# Usage:
 #   openshell sandbox create --from . \
 #     --upload .env:/sandbox/.env \
 #     --policy openeral-shell/policy.yaml
-#
-# Usage (Docker Compose):
-#   docker compose up -d
 #
 # Sets up:
 #   /db         — read-only PostgreSQL database browsable as files
@@ -38,13 +35,10 @@ fi
 if [ -z "$DB_URL" ]; then
     echo "ERROR: DATABASE_URL is not set." >&2
     echo "" >&2
-    echo "Via OpenShell (from repo root):" >&2
+    echo "From repo root:" >&2
     echo "  openshell sandbox create --from . \\" >&2
     echo "    --upload .env:/sandbox/.env \\" >&2
     echo "    --policy openeral-shell/policy.yaml" >&2
-    echo "" >&2
-    echo "Via Docker Compose:" >&2
-    echo "  Set DATABASE_URL in openeral-shell/.env" >&2
     exit 1
 fi
 
