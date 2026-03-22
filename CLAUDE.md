@@ -51,6 +51,10 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 - Errors map to `FsError` which converts to `fuser::Errno`
 - New node types: add to `NodeIdentity` enum, create handler in `fs/nodes/`, wire into dispatch functions
 
+## Hard Rules
+
+- **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
+
 ## Commit Style
 
 Look at `git log --oneline` for the existing style. Commits are descriptive, imperative mood, with details in the body when needed.

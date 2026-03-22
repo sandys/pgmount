@@ -53,4 +53,5 @@ RUN mkdir -p /sandbox/.openeral-config && chown sandbox:sandbox /sandbox/.opener
 
 USER sandbox
 
-ENTRYPOINT ["/bin/bash"]
+ENTRYPOINT ["openeral-shell-start"]
+CMD ["sleep", "infinity"]

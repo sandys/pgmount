@@ -15,14 +15,17 @@ docker compose exec openeral-shell claude
 ## Quick Start (OpenShell)
 
 ```bash
-# Build the sandbox image (one time, from repo root)
-docker build -t openshell-openeral-shell -f openeral-shell/Dockerfile .
+# Create .env with your credentials
+cp openeral-shell/.env.example .env
+# Edit .env — set ANTHROPIC_API_KEY and optionally DATABASE_URL
 
-# Create and run
-openshell sandbox create --from openeral-shell \
-  -e DATABASE_URL="postgres://user:pass@host/db" \
-  -e ANTHROPIC_API_KEY="sk-ant-..." \
-  -- openeral-shell-start
+# Create the sandbox (from repo root)
+openshell sandbox create --from . \
+  --upload .env:/sandbox/.env \
+  --policy openeral-shell/policy.yaml
+
+# Connect and run Claude Code
+openshell sandbox connect <sandbox-name> -- claude
 ```
 
 ## What Claude Code Gets

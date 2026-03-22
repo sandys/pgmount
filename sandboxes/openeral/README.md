@@ -5,19 +5,20 @@ A container image for running AI agents with PostgreSQL database access at `/db`
 ## Quick Start
 
 ```bash
-# Build the sandbox image
-openshell sandbox build openeral
+# Create .env with OPENERAL_DATABASE_URL (and optionally OPENERAL_WORKSPACE_ID, etc.)
 
 # Database access only
-openshell sandbox create --from openeral \
-  -e OPENERAL_DATABASE_URL="postgres://readonly:pass@db.example.com/myapp" \
+openshell sandbox create --from sandboxes/openeral \
+  --upload .env:/sandbox/.env \
   -- openeral-start.sh openclaw-start
 
 # Database access + persistent workspace
-openshell sandbox create --from openeral \
-  -e OPENERAL_DATABASE_URL="postgres://user:pass@db.example.com/myapp" \
-  -e OPENERAL_WORKSPACE_ID="agent-42" \
-  -e OPENERAL_WORKSPACE_CONFIG='{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}' \
+# .env should contain:
+#   OPENERAL_DATABASE_URL=postgres://user:pass@db.example.com/myapp
+#   OPENERAL_WORKSPACE_ID=agent-42
+#   OPENERAL_WORKSPACE_CONFIG={"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}
+openshell sandbox create --from sandboxes/openeral \
+  --upload .env:/sandbox/.env \
   -- openeral-start.sh openclaw-start
 ```
 
@@ -54,11 +55,13 @@ When `OPENERAL_WORKSPACE_ID` is set, the entrypoint:
 To run Claude Code with persistent state in the sandbox:
 
 ```bash
-openshell sandbox create --from openeral \
-  -e OPENERAL_DATABASE_URL="postgres://user:pass@db/myapp" \
-  -e OPENERAL_WORKSPACE_ID="claude-agent-1" \
-  -e OPENERAL_WORKSPACE_CONFIG='{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions",".claude/tasks",".claude/todos"]}' \
-  -e ANTHROPIC_API_KEY="sk-ant-..." \
+# .env should contain:
+#   OPENERAL_DATABASE_URL=postgres://user:pass@db/myapp
+#   OPENERAL_WORKSPACE_ID=claude-agent-1
+#   OPENERAL_WORKSPACE_CONFIG={"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions",".claude/tasks",".claude/todos"]}
+#   ANTHROPIC_API_KEY=sk-ant-...
+openshell sandbox create --from sandboxes/openeral \
+  --upload .env:/sandbox/.env \
   -- openeral-start.sh claude
 ```
 
@@ -75,7 +78,7 @@ psql -c "SELECT path, size FROM _openeral.workspace_files WHERE workspace_id='cl
 
 | Tier | Approach | Security |
 |------|----------|----------|
-| Simple | `-e OPENERAL_DATABASE_URL=...` on sandbox create | Visible in process list |
+| Simple | `--upload .env:/sandbox/.env` on sandbox create | File-based, not in process list |
 | Recommended | Docker secret at `/run/secrets/openeral_database_url` | Not in env or process list |
 | Production | Read-only PG role + PgBouncer + secrets injection | Minimal privilege |
 

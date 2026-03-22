@@ -5,13 +5,27 @@ set -euo pipefail
 # openeral-shell-start — Configure and start the persistent shell environment.
 # Designed for OpenShell sandboxes.
 #
-# Usage:
-#   openshell sandbox create --from openeral-shell -- openeral-shell-start
+# Usage (OpenShell):
+#   openshell sandbox create --from . \
+#     --upload .env:/sandbox/.env \
+#     --policy openeral-shell/policy.yaml
+#
+# Usage (Docker Compose):
+#   docker compose up -d
 #
 # Sets up:
 #   /db         — read-only PostgreSQL database browsable as files
 #   /home/agent — read-write persistent home directory (backed by PostgreSQL)
 # =============================================================================
+
+# --- Source .env file if uploaded via --upload .env:/sandbox/.env ---
+
+if [ -f /sandbox/.env ]; then
+    set -a
+    # shellcheck source=/dev/null
+    . /sandbox/.env
+    set +a
+fi
 
 # --- Resolve database connection ---
 
@@ -24,13 +38,13 @@ fi
 if [ -z "$DB_URL" ]; then
     echo "ERROR: DATABASE_URL is not set." >&2
     echo "" >&2
-    echo "Via OpenShell:" >&2
-    echo "  openshell sandbox create --from openeral-shell \\" >&2
-    echo "    -e DATABASE_URL='postgres://user:pass@host/db' \\" >&2
-    echo "    -- openeral-shell-start" >&2
+    echo "Via OpenShell (from repo root):" >&2
+    echo "  openshell sandbox create --from . \\" >&2
+    echo "    --upload .env:/sandbox/.env \\" >&2
+    echo "    --policy openeral-shell/policy.yaml" >&2
     echo "" >&2
     echo "Via Docker Compose:" >&2
-    echo "  Set DATABASE_URL in docker-compose.yml or .env" >&2
+    echo "  Set DATABASE_URL in openeral-shell/.env" >&2
     exit 1
 fi
 
@@ -135,6 +149,10 @@ echo "  Home:     /home/agent/ (persistent)"
 echo ""
 
 # --- Hand off (drop privileges if running as root) ---
+
+if [ $# -eq 0 ]; then
+    set -- sleep infinity
+fi
 
 if [ "$(id -u)" = "0" ] && id sandbox >/dev/null 2>&1; then
     chown sandbox:sandbox "$AGENT_LOCAL" "$AGENT_LOCAL/.claude.json" 2>/dev/null || true
