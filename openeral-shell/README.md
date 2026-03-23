@@ -6,23 +6,31 @@ An OpenShell sandbox that mounts a PostgreSQL database as a browsable filesystem
 
 openeral-shell starts two FUSE mounts inside the container. `/db/` exposes your PostgreSQL database as a read-only hierarchy of schemas, tables, rows, and columns — navigable with `ls` and `cat`, no SQL required. `/home/agent/` is a read-write workspace where every file persists in PostgreSQL across container restarts.
 
-openeral is a standard Linux FUSE filesystem (`fuse.openeral`). Mounts can be declared in `/etc/fstab` and managed by `mount.fuse3`, `systemd`, or any orchestrator that inspects fstab.
+openeral is a standard Linux FUSE filesystem (`fuse.openeral`). Mounts are declared in `/etc/fstab` and managed by the OpenShell supervisor via `mount.fuse3` — no elevated privileges leak to user code.
 
 ## Quick Start (OpenShell)
 
+openeral-shell ships a custom cluster image with FUSE support. Start the gateway with it, then create sandboxes as usual:
+
 ```bash
-# 1. Create .env (from repo root)
+# 1. Start the gateway with FUSE-enabled cluster image
+OPENSHELL_CLUSTER_IMAGE=ghcr.io/pgmount/openeral-cluster:latest \
+  openshell gateway start
+
+# 2. Create .env
 cat > .env <<'EOF'
 DATABASE_URL=postgres://user:pass@host/db
 ANTHROPIC_API_KEY=sk-ant-...
 EOF
 
-# 2. Create the sandbox
+# 3. Create the sandbox
 openshell sandbox create --from . --upload .env
 
-# 3. Connect
+# 4. Connect
 openshell sandbox connect <sandbox-name> -- claude
 ```
+
+The patched supervisor reads `/etc/fstab` from the sandbox image, discovers `fuse.openeral` entries, creates `/dev/fuse`, and establishes the FUSE mounts before the child process runs. The child sees `/db/` and `/home/agent/` as regular directories with zero capabilities.
 
 ## Quick Start (Standard Linux)
 
@@ -116,7 +124,7 @@ The fstab source field encodes the connection string. For workspace mounts, appe
 "host=pg dbname=mydb#workspace#default"  /home/agent  fuse.openeral  rw,noauto,allow_other  0  0
 ```
 
-With `mount.fuse3 --drop_privileges`, the FUSE daemon runs fully unprivileged — no capabilities, no setuid. This is the mechanism for safe FUSE mounts in sandboxed environments.
+In OpenShell sandboxes, the supervisor reads these fstab entries and sets up the mounts during its privileged startup phase. The FUSE daemons run as supervisor-managed services. The child process accesses the mounts with zero capabilities.
 
 ## Environment Variables
 
@@ -142,5 +150,19 @@ WORKSPACE_ID=agent-alice
 
 - **Landlock policy** — `/db/` read-only, `/home/agent/` read-write, system directories locked
 - **FUSE isolation** — database and workspace are independent mounts
-- **Non-root execution** — runs as `sandbox` user (UID 1000)
-- **drop_privileges** — `mount.fuse3` can mount openeral filesystems with zero capabilities passed to the daemon
+- **Non-root execution** — child runs as `sandbox` user (UID 1000) with zero capabilities
+- **Supervisor-managed FUSE** — `mount.fuse3` establishes mounts during privileged startup; daemons run as background services alongside proxy and SSH
+- **fstab inspection** — FUSE mounts are discovered from the image's `/etc/fstab`, not from executable code
+
+## Building the Cluster Image
+
+The custom cluster image is built from the vendored OpenShell source with the FUSE supervisor patch:
+
+```bash
+cd vendor/openshell
+docker buildx build --target cluster \
+  -t ghcr.io/<owner>/openeral-cluster:latest \
+  -f deploy/docker/Dockerfile.images .
+```
+
+CI pushes to GHCR automatically on changes to `vendor/openshell/`.
