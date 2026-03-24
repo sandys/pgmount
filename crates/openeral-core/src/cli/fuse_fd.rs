@@ -219,8 +219,17 @@ async fn execute_workspace(
 
     migrate::run_migrations(&pool).await?;
 
-    // Verify workspace exists
-    let ws = ws_queries::get_workspace(&pool, &workspace_id).await?;
+    // Auto-create workspace if it doesn't exist (fstab mode doesn't have a separate create step)
+    let ws = match ws_queries::get_workspace(&pool, &workspace_id).await {
+        Ok(ws) => ws,
+        Err(_) => {
+            info!(workspace_id = %workspace_id, "Workspace not found, creating");
+            let default_layout = crate::db::types::WorkspaceLayout::default();
+            ws_queries::create_workspace(&pool, &workspace_id, Some(&workspace_id), &default_layout).await?;
+            ws_queries::seed_from_config(&pool, &workspace_id, &default_layout).await?;
+            ws_queries::get_workspace(&pool, &workspace_id).await?
+        }
+    };
     info!(workspace_id = %ws.id, "Workspace found");
 
     // Ensure seeded dirs exist

@@ -88,31 +88,22 @@ pub fn discover_fuse_mounts() -> Vec<FuseMount> {
     mounts
 }
 
-/// Create /dev/fuse character device if it doesn't exist.
-#[cfg(target_os = "linux")]
+/// Verify /dev/fuse is available.
+///
+/// The fuse-device-plugin DaemonSet provides /dev/fuse to containers that
+/// request the `github.com/fuse` resource. The kubelet handles the device
+/// cgroup allowlist and bind-mount automatically.
 pub fn ensure_fuse_device() -> Result<()> {
-    use nix::sys::stat::{self, SFlag};
-
     let path = Path::new("/dev/fuse");
     if path.exists() {
-        return Ok(());
+        info!("/dev/fuse available (provided by fuse-device-plugin)");
+        Ok(())
+    } else {
+        Err(miette::miette!(
+            "/dev/fuse not found. The fuse-device-plugin DaemonSet may not be deployed, \
+             or the pod did not request the github.com/fuse resource."
+        ))
     }
-
-    info!("Creating /dev/fuse (10, 229)");
-    stat::mknod(
-        path,
-        SFlag::S_IFCHR,
-        stat::Mode::from_bits_truncate(0o666),
-        stat::makedev(10, 229),
-    )
-    .into_diagnostic()?;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn ensure_fuse_device() -> Result<()> {
-    Ok(())
 }
 
 /// Find mount.fuse3 in standard locations.

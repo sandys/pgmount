@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fuse-device-plugin
+  namespace: kube-system
+  labels:
+    app: fuse-device-plugin
+spec:
+  selector:
+    matchLabels:
+      name: fuse-device-plugin
+  template:
+    metadata:
+      labels:
+        name: fuse-device-plugin
+    spec:
+      priorityClassName: system-node-critical
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: fuse-device-plugin
+        image: soolaugust/fuse-device-plugin:v1.0
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins

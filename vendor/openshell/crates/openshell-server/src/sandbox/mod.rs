@@ -1137,6 +1137,10 @@ fn container_resources(template: &SandboxTemplate, gpu: bool) -> Option<serde_js
     if gpu {
         apply_gpu_limit(&mut resources);
     }
+    // Always request the FUSE device so images with fstab fuse.* entries work.
+    // If the fuse-device-plugin DaemonSet is not deployed, this is a no-op
+    // (the pod just won't get scheduled until the plugin is available).
+    apply_fuse_device_limit(&mut resources);
     if resources
         .as_object()
         .is_some_and(|object| object.is_empty())
@@ -1174,6 +1178,26 @@ fn apply_gpu_limit(resources: &mut serde_json::Value) {
         GPU_RESOURCE_NAME.to_string(),
         serde_json::json!(GPU_RESOURCE_QUANTITY),
     );
+}
+
+/// Request the FUSE device from the fuse-device-plugin DaemonSet.
+/// When the kubelet sees this resource limit, it automatically adds
+/// /dev/fuse to the container's device cgroup allowlist and bind-mounts it.
+fn apply_fuse_device_limit(resources: &mut serde_json::Value) {
+    let Some(resources_obj) = resources.as_object_mut() else {
+        *resources = serde_json::json!({});
+        return apply_fuse_device_limit(resources);
+    };
+
+    let limits = resources_obj
+        .entry("limits")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(limits_obj) = limits.as_object_mut() else {
+        *limits = serde_json::json!({});
+        return apply_fuse_device_limit(resources);
+    };
+
+    limits_obj.insert("github.com/fuse".to_string(), serde_json::json!("1"));
 }
 
 #[allow(clippy::too_many_arguments)]
