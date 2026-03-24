@@ -482,12 +482,24 @@ if [ -f "$FUSE_BASE_SPEC" ]; then
     mkdir -p /etc/containerd
     cp "$FUSE_BASE_SPEC" /etc/containerd/cri-base.json
 
-    CONTAINERD_TMPL="/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl"
-    mkdir -p "$(dirname "$CONTAINERD_TMPL")"
-    cat > "$CONTAINERD_TMPL" <<'CONTAINERD_EOF'
+    # K3s v1.35+ uses containerd 2.0 which requires config-v3.toml.tmpl.
+    # Older K3s versions use config.toml.tmpl. Write both for compatibility.
+    CONTAINERD_DIR="/var/lib/rancher/k3s/agent/etc/containerd"
+    mkdir -p "$CONTAINERD_DIR"
+
+    # containerd 2.0 (K3s v1.35+)
+    cat > "$CONTAINERD_DIR/config-v3.toml.tmpl" <<'CONTAINERD_EOF'
 {{ template "base" . }}
 
 [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  base_runtime_spec = "/etc/containerd/cri-base.json"
+CONTAINERD_EOF
+
+    # containerd 1.x (older K3s)
+    cat > "$CONTAINERD_DIR/config.toml.tmpl" <<'CONTAINERD_EOF'
+{{ template "base" . }}
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
   base_runtime_spec = "/etc/containerd/cri-base.json"
 CONTAINERD_EOF
 
