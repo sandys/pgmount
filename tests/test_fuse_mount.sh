@@ -577,9 +577,19 @@ echo ""
 
 # ---- mount.fuse3 Integration Tests ----
 
-# Ensure openeral is in PATH for mount.fuse3 to find it
-if ! command -v openeral &>/dev/null; then
-    ln -sf "$OPENERAL_BIN" /usr/local/bin/openeral
+# Ensure openeral is in PATH for mount.fuse3 to find it.
+# Relying on /usr/local/bin symlinks is brittle in CI and unneeded here.
+OPENERAL_BIN_DIR="$(dirname "$OPENERAL_BIN")"
+case ":$PATH:" in
+    *":$OPENERAL_BIN_DIR:"*) ;;
+    *) export PATH="$OPENERAL_BIN_DIR:$PATH" ;;
+esac
+
+# `allow_other` requires an explicit host opt-in via /etc/fuse.conf.
+# CI enables this ahead of the test run; local development often does not.
+FUSE3_ALLOW_OTHER_OPT=""
+if grep -Eq '^[[:space:]]*user_allow_other([[:space:]]|$)' /etc/fuse.conf 2>/dev/null; then
+    FUSE3_ALLOW_OTHER_OPT=",allow_other"
 fi
 
 echo "--- 19. mount.fuse3 Database Mount ---"
@@ -588,7 +598,7 @@ mkdir -p "$FUSE3_MNT"
 
 # mount.fuse3 replaces its process with the FUSE daemon, so mount blocks.
 # Run in background, wait for mountpoint to appear.
-mount -t fuse.openeral "host=postgres user=pgmount password=pgmount dbname=testdb" "$FUSE3_MNT" -o ro,allow_other &
+mount -t fuse.openeral "$DB_CONN" "$FUSE3_MNT" -o "ro${FUSE3_ALLOW_OTHER_OPT}" &
 FUSE3_PID=$!
 
 fuse3_ready=0
@@ -627,12 +637,12 @@ echo "--- 20. mount.fuse3 Workspace Mount ---"
 FUSE3_WS_MNT="/tmp/openeral_fuse3_ws_test"
 mkdir -p "$FUSE3_WS_MNT"
 
-OPENERAL_DATABASE_URL="host=postgres user=pgmount password=pgmount dbname=testdb" \
+OPENERAL_DATABASE_URL="$DB_CONN" \
     "$OPENERAL_BIN" workspace create fuse3-test --display-name "fuse3 test" --skip-migrations 2>/dev/null || true
 
 mount -t fuse.openeral \
-    "host=postgres user=pgmount password=pgmount dbname=testdb#workspace#fuse3-test" \
-    "$FUSE3_WS_MNT" -o rw,allow_other &
+    "${DB_CONN}#workspace#fuse3-test" \
+    "$FUSE3_WS_MNT" -o "rw${FUSE3_ALLOW_OTHER_OPT}" &
 FUSE3_WS_PID=$!
 
 fuse3_ws_ready=0
@@ -665,7 +675,7 @@ echo "--- 21. Consistency: Direct vs mount.fuse3 ---"
 FUSE3_CONS_MNT="/tmp/openeral_fuse3_consistency"
 mkdir -p "$FUSE3_CONS_MNT"
 
-mount -t fuse.openeral "host=postgres user=pgmount password=pgmount dbname=testdb" "$FUSE3_CONS_MNT" -o ro,allow_other &
+mount -t fuse.openeral "$DB_CONN" "$FUSE3_CONS_MNT" -o "ro${FUSE3_ALLOW_OTHER_OPT}" &
 FUSE3_CONS_PID=$!
 
 fuse3_cons_ready=0
