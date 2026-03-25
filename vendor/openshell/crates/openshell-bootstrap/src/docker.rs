@@ -3,7 +3,7 @@
 
 use crate::RemoteOptions;
 use crate::constants::{container_name, network_name, volume_name};
-use crate::image::{self, DEFAULT_IMAGE_REPO_BASE, DEFAULT_REGISTRY, parse_image_ref};
+use crate::image::{self, DEFAULT_REGISTRY, parse_image_ref};
 use bollard::API_DEFAULT_VERSION;
 use bollard::Docker;
 use bollard::errors::Error as BollardError;
@@ -38,6 +38,51 @@ fn env_bool(key: &str) -> Option<bool> {
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+fn gateway_image_repo_base_override_from_context(
+    explicit_repo_base: Option<&str>,
+    image_ref: &str,
+    registry_host: &str,
+    registry_namespace: &str,
+) -> Option<String> {
+    if let Some(repo_base) = explicit_repo_base
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(repo_base.to_string());
+    }
+
+    // When the cluster image itself encodes the OpenShell image family
+    // (`.../cluster:<tag>`), let the cluster entrypoint decide which sibling
+    // gateway repo to use. This preserves baked openeral defaults such as the
+    // in-cluster registry host used by local development.
+    if image::derive_image_repo_base_from_cluster_ref(image_ref).is_some() {
+        return None;
+    }
+
+    // Fallback for non-canonical image refs or alternate registries where the
+    // cluster cannot infer the repo base from its own image reference.
+    if registry_host != DEFAULT_REGISTRY || registry_namespace != REGISTRY_NAMESPACE_DEFAULT {
+        return Some(format!("{registry_host}/{registry_namespace}"));
+    }
+
+    None
+}
+
+fn gateway_image_repo_base_override(
+    image_ref: &str,
+    registry_host: &str,
+    registry_namespace: &str,
+) -> Option<String> {
+    let explicit_repo_base =
+        env_non_empty("IMAGE_REPO_BASE").or_else(|| env_non_empty("OPENSHELL_IMAGE_REPO_BASE"));
+    gateway_image_repo_base_override_from_context(
+        explicit_repo_base.as_deref(),
+        image_ref,
+        registry_host,
+        registry_namespace,
+    )
 }
 
 /// Platform information for a Docker daemon host.
@@ -577,17 +622,8 @@ pub async fn ensure_container(
         env_non_empty("OPENSHELL_REGISTRY_HOST").unwrap_or_else(|| DEFAULT_REGISTRY.to_string());
     let registry_namespace = env_non_empty("OPENSHELL_REGISTRY_NAMESPACE")
         .unwrap_or_else(|| REGISTRY_NAMESPACE_DEFAULT.to_string());
-    let image_repo_base = env_non_empty("IMAGE_REPO_BASE")
-        .or_else(|| env_non_empty("OPENSHELL_IMAGE_REPO_BASE"))
-        .or_else(|| image::derive_image_repo_base_from_cluster_ref(image_ref))
-        .unwrap_or_else(|| {
-            if registry_host == DEFAULT_REGISTRY {
-                // For ghcr.io the default namespace is the full org path.
-                DEFAULT_IMAGE_REPO_BASE.to_string()
-            } else {
-                format!("{registry_host}/{registry_namespace}")
-            }
-        });
+    let image_repo_base =
+        gateway_image_repo_base_override(image_ref, &registry_host, &registry_namespace);
     let registry_insecure = env_bool("OPENSHELL_REGISTRY_INSECURE").unwrap_or(false);
     let registry_endpoint = env_non_empty("OPENSHELL_REGISTRY_ENDPOINT");
 
@@ -610,8 +646,10 @@ pub async fn ensure_container(
         format!("REGISTRY_MODE={REGISTRY_MODE_EXTERNAL}"),
         format!("REGISTRY_HOST={registry_host}"),
         format!("REGISTRY_INSECURE={registry_insecure}"),
-        format!("IMAGE_REPO_BASE={image_repo_base}"),
     ];
+    if let Some(image_repo_base) = image_repo_base {
+        env_vars.push(format!("IMAGE_REPO_BASE={image_repo_base}"));
+    }
     if let Some(endpoint) = registry_endpoint {
         env_vars.push(format!("REGISTRY_ENDPOINT={endpoint}"));
     }
@@ -1194,6 +1232,45 @@ mod tests {
         assert!(
             sockets.len() <= 10,
             "should return a reasonable number of sockets"
+        );
+    }
+
+    #[test]
+    fn gateway_repo_override_prefers_explicit_override() {
+        let repo_base = gateway_image_repo_base_override_from_context(
+            Some("ghcr.io/acme/openeral"),
+            "ghcr.io/acme/openeral/cluster:sha-test",
+            DEFAULT_REGISTRY,
+            REGISTRY_NAMESPACE_DEFAULT,
+        );
+        assert_eq!(repo_base.as_deref(), Some("ghcr.io/acme/openeral"));
+    }
+
+    #[test]
+    fn gateway_repo_override_omits_cluster_derived_repo_base() {
+        let repo_base = gateway_image_repo_base_override_from_context(
+            None,
+            "127.0.0.1:5000/openshell/openeral/cluster:dev",
+            "172.17.0.1:5000",
+            REGISTRY_NAMESPACE_DEFAULT,
+        );
+        assert!(
+            repo_base.is_none(),
+            "cluster image refs should defer to the cluster entrypoint defaults"
+        );
+    }
+
+    #[test]
+    fn gateway_repo_override_uses_custom_registry_when_not_inferable() {
+        let repo_base = gateway_image_repo_base_override_from_context(
+            None,
+            "cluster-local:dev",
+            "registry.internal:5000",
+            "openshell/openeral",
+        );
+        assert_eq!(
+            repo_base.as_deref(),
+            Some("registry.internal:5000/openshell/openeral")
         );
     }
 }

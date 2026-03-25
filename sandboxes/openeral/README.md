@@ -20,6 +20,33 @@ From there, the supported flow is:
 2. create one generic provider for the live database
 3. launch Claude from the sandbox image
 
+## Image Contract
+
+OpenEral FUSE support uses three custom runtime images:
+
+- `cluster`
+  - boots k3s
+  - bundles the patched `openshell-sandbox` supervisor
+  - installs the FUSE device-plugin manifests
+- `gateway`
+  - creates sandbox pod specs
+  - requests the FUSE device resource
+- `sandbox`
+  - contains `openeral`, `fuse3`, and `/etc/fstab`
+
+Only two refs are user-facing:
+
+- `OPENSHELL_CLUSTER_IMAGE`
+- `OPENERAL_SANDBOX_IMAGE`
+
+The `gateway` image is internal. It is resolved from the cluster image and must come from the same openeral image set.
+
+Unsupported combinations:
+
+- openeral `cluster` + upstream `gateway`
+- upstream `cluster` + openeral `gateway`
+- upstream `cluster` + openeral `sandbox`
+
 ### Local Development
 
 If you are developing locally, build and publish all three images to a local registry first.
@@ -119,7 +146,7 @@ openshell sandbox create \
   --no-tty -- env HOME=/home/agent claude
 ```
 
-The cluster image resolves the matching gateway image automatically. For repeatable deployments, prefer the same immutable tag for both `OPENSHELL_CLUSTER_IMAGE` and `OPENERAL_SANDBOX_IMAGE`.
+The cluster image resolves the matching gateway image automatically. The gateway image is still required, but it is not a user-facing input. For repeatable deployments, prefer the same immutable tag for both `OPENSHELL_CLUSTER_IMAGE` and `OPENERAL_SANDBOX_IMAGE`.
 
 This is the preferred and supported user flow:
 

@@ -154,12 +154,29 @@ jobs:
       - name: Build vendored OpenShell CLI
         run: cargo build --manifest-path vendor/openshell/Cargo.toml -p openshell-cli --release
 
+      - name: Verify mixed-stack guard
+        env:
+          CLUSTER_IMAGE: ${{ env.IMAGE_REPO_BASE }}/cluster:${{ env.CANDIDATE_TAG }}
+        run: |
+          set -euo pipefail
+          output_file="$(mktemp)"
+          status=0
+          docker run --rm --privileged \
+            -e IMAGE_REPO_BASE=ghcr.io/nvidia/openshell \
+            "$CLUSTER_IMAGE" server --disable=traefik \
+            >"$output_file" 2>&1 || status=$?
+          cat "$output_file"
+          if [ "$status" -eq 0 ]; then
+            echo "Expected mixed-stack guard to fail" >&2
+            exit 1
+          fi
+          grep -q "cannot resolve the upstream OpenShell gateway image" "$output_file"
+
       - name: Run OpenShell smoke test
         env:
           OPENSHELL_CLUSTER_IMAGE: ${{ env.IMAGE_REPO_BASE }}/cluster:${{ env.CANDIDATE_TAG }}
           OPENERAL_GATEWAY_IMAGE: ${{ env.IMAGE_REPO_BASE }}/gateway:${{ env.CANDIDATE_TAG }}
           OPENERAL_SANDBOX_IMAGE: ${{ env.IMAGE_REPO_BASE }}/sandbox:${{ env.CANDIDATE_TAG }}
-          OPENSHELL_IMAGE_REPO_BASE: ghcr.io/nvidia/openshell
           IMAGE_TAG: latest
           OPENSHELL_REGISTRY_USERNAME: ${{ github.actor }}
           OPENSHELL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

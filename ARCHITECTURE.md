@@ -65,7 +65,7 @@ openeral/
         workspace_integration.rs    # Workspace DB operations tests
   sandboxes/
     openeral/                        # OpenShell sandbox for AI agents
-      Dockerfile                    # Multi-stage: build openeral + extend openclaw base
+      Dockerfile                    # Multi-stage: build openeral + extend upstream base sandbox
       policy.yaml                   # Landlock filesystem + capability policy
       README.md                     # Published-image OpenShell flow and sandbox behavior
       skills/openeral-navigate/     # Agent skill for /db navigation

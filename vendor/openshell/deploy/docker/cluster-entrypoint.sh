@@ -25,6 +25,7 @@
 
 set -e
 
+REGISTRY_NAMESPACE_DEFAULT="openshell"
 UPSTREAM_DEFAULT_IMAGE_REPO_BASE="ghcr.io/nvidia/openshell"
 
 RESOLV_CONF="/etc/rancher/k3s/resolv.conf"
@@ -361,9 +362,31 @@ fi
 # images already present in containerd instead of pulling from the registry.
 HELMCHART="/var/lib/rancher/k3s/server/manifests/openshell-helmchart.yaml"
 
-GATEWAY_IMAGE_REPO_BASE="${IMAGE_REPO_BASE:-}"
-if [ -n "${OPENERAL_DEFAULT_IMAGE_REPO_BASE:-}" ] && { [ -z "$GATEWAY_IMAGE_REPO_BASE" ] || [ "$GATEWAY_IMAGE_REPO_BASE" = "$UPSTREAM_DEFAULT_IMAGE_REPO_BASE" ]; }; then
-    GATEWAY_IMAGE_REPO_BASE="${OPENERAL_DEFAULT_IMAGE_REPO_BASE}"
+EXPLICIT_GATEWAY_IMAGE_REPO_BASE="${IMAGE_REPO_BASE:-}"
+GATEWAY_IMAGE_REPO_BASE="${EXPLICIT_GATEWAY_IMAGE_REPO_BASE}"
+HOST_DEFAULT_GATEWAY_IMAGE_REPO_BASE=""
+
+if [ -n "${REGISTRY_HOST:-}" ]; then
+    HOST_DEFAULT_GATEWAY_IMAGE_REPO_BASE="${REGISTRY_HOST}/${REGISTRY_NAMESPACE_DEFAULT}"
+fi
+
+if [ -n "${OPENERAL_DEFAULT_IMAGE_REPO_BASE:-}" ]; then
+    if [ -n "$EXPLICIT_GATEWAY_IMAGE_REPO_BASE" ] && [ "$EXPLICIT_GATEWAY_IMAGE_REPO_BASE" = "$UPSTREAM_DEFAULT_IMAGE_REPO_BASE" ]; then
+        echo "Error: openeral cluster image cannot resolve the upstream OpenShell gateway image."
+        echo "Use the matching openeral gateway image set baked into the cluster image,"
+        echo "or provide an explicit openeral IMAGE_REPO_BASE override."
+        exit 1
+    fi
+
+    if [ -n "$EXPLICIT_GATEWAY_IMAGE_REPO_BASE" ] && [ -n "$HOST_DEFAULT_GATEWAY_IMAGE_REPO_BASE" ] && [ "$EXPLICIT_GATEWAY_IMAGE_REPO_BASE" = "$HOST_DEFAULT_GATEWAY_IMAGE_REPO_BASE" ]; then
+        echo "Ignoring host-derived IMAGE_REPO_BASE=${EXPLICIT_GATEWAY_IMAGE_REPO_BASE}"
+        echo "Using baked openeral gateway repo base: ${OPENERAL_DEFAULT_IMAGE_REPO_BASE}"
+        GATEWAY_IMAGE_REPO_BASE="${OPENERAL_DEFAULT_IMAGE_REPO_BASE}"
+    fi
+
+    if [ -z "$GATEWAY_IMAGE_REPO_BASE" ]; then
+        GATEWAY_IMAGE_REPO_BASE="${OPENERAL_DEFAULT_IMAGE_REPO_BASE}"
+    fi
 fi
 
 if [ -n "${GATEWAY_IMAGE_REPO_BASE:-}" ] && [ -f "$HELMCHART" ]; then
@@ -403,6 +426,10 @@ if [ -n "${GATEWAY_IMAGE_TAG:-}" ] && [ -f "$HELMCHART" ]; then
     # server image tag (standalone value field)
     # Handle both quoted and unquoted defaults: tag: "latest" / tag: latest
     sed -i -E "s|tag:[[:space:]]*\"?latest\"?|tag: \"${GATEWAY_IMAGE_TAG}\"|" "$HELMCHART"
+fi
+
+if [ -n "${GATEWAY_IMAGE_REPO_BASE:-}" ] && [ -n "${GATEWAY_IMAGE_TAG:-}" ]; then
+    echo "Resolved gateway image: ${GATEWAY_IMAGE_REPO_BASE}/gateway:${GATEWAY_IMAGE_TAG}"
 fi
 
 if [ -n "${IMAGE_PULL_POLICY:-}" ] && [ -f "$HELMCHART" ]; then

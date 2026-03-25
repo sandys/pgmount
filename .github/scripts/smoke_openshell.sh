@@ -11,12 +11,16 @@ SANDBOX_NAME="${OPENERAL_SANDBOX_NAME:-openeral-smoke-${RANDOM}}"
 DB_PROVIDER="${OPENERAL_DB_PROVIDER:-openeral-db-${RANDOM}}"
 DB_CONTAINER="${OPENERAL_SMOKE_DB_CONTAINER:-openeral-smoke-postgres}"
 DB_PORT="${OPENERAL_SMOKE_DB_PORT:-15432}"
+DOWNLOAD_DIR=""
 
 cleanup() {
     set +e
     openshell sandbox delete --gateway "$GATEWAY_NAME" "$SANDBOX_NAME" >/dev/null 2>&1 || true
     openshell gateway destroy --name "$GATEWAY_NAME" >/dev/null 2>&1 || true
     docker rm -f "$DB_CONTAINER" >/dev/null 2>&1 || true
+    if [ -n "$DOWNLOAD_DIR" ]; then
+        rm -rf "$DOWNLOAD_DIR" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT
 
@@ -95,6 +99,8 @@ SANDBOX_OUTPUT="$(
         --no-tty -- \
         sh -lc '
             set -e
+            test -e /dev/fuse
+            id
             grep -E " /db | /home/agent " /proc/mounts
             test -w /home/agent
             cat /db/public/users/.filter/id/1/1/row.json
@@ -106,6 +112,25 @@ printf '%s\n' "$SANDBOX_OUTPUT"
 
 printf '%s\n' "$SANDBOX_OUTPUT" | grep -q 'Ada Lovelace'
 printf '%s\n' "$SANDBOX_OUTPUT" | grep -q 'persist-ok'
+printf '%s\n' "$SANDBOX_OUTPUT" | grep -q 'uid='
+
+DOWNLOAD_DIR="$(mktemp -d)"
+openshell sandbox download \
+    --gateway "$GATEWAY_NAME" \
+    "$SANDBOX_NAME" \
+    /home/agent/manual.txt \
+    "$DOWNLOAD_DIR"
+
+DOWNLOADED_MANUAL="$DOWNLOAD_DIR/manual.txt"
+if [ ! -f "$DOWNLOADED_MANUAL" ]; then
+    echo "Expected downloaded manual.txt at ${DOWNLOADED_MANUAL}" >&2
+    exit 1
+fi
+
+if [ "$(cat "$DOWNLOADED_MANUAL")" != "persist-ok" ]; then
+    echo "Expected downloaded manual.txt to contain persist-ok" >&2
+    exit 1
+fi
 
 MANUAL_COUNT="$(
     PGPASSWORD=pgmount psql -h localhost -p "$DB_PORT" -U pgmount -d testdb -Atqc \

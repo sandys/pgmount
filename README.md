@@ -52,6 +52,33 @@ From that starting point, the full flow is:
 
 The database itself may exist out of band. The only OpenShell-side setup you need is the gateway and the generic database provider.
 
+### Image Contract
+
+OpenEral FUSE support depends on three custom runtime images:
+
+- `cluster`
+  - boots k3s
+  - bundles the patched `openshell-sandbox` supervisor
+  - installs the FUSE device-plugin manifests
+- `gateway`
+  - creates sandbox pod specs
+  - requests the FUSE device resource
+- `sandbox`
+  - contains `openeral`, `fuse3`, and the `/etc/fstab` mount declarations
+
+In normal use you only set two refs:
+
+- `OPENSHELL_CLUSTER_IMAGE`
+- `OPENERAL_SANDBOX_IMAGE`
+
+The matching `gateway` image is internal and is resolved from the cluster image. It is version-locked to that cluster image and should not be mixed with upstream OpenShell images.
+
+Unsupported combinations:
+
+- openeral `cluster` + upstream `gateway`
+- upstream `cluster` + openeral `gateway`
+- upstream `cluster` + openeral `sandbox`
+
 ### Local Development
 
 If you are developing locally, build and publish all three images to a local registry first.
@@ -164,6 +191,8 @@ The cluster image resolves the matching gateway image automatically. In normal u
 
 - `OPENSHELL_CLUSTER_IMAGE`
 - `OPENERAL_SANDBOX_IMAGE`
+
+Behind the scenes, the gateway image is still required and must come from the same openeral image set as the cluster image.
 
 For repeatable deployments, prefer the same immutable tag for both refs, for example a release tag or `sha-<commit>`. `latest` is intended for atomic quickstarts, not for long-lived pinned environments.
 

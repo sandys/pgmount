@@ -15,8 +15,8 @@ COPY crates/ crates/
 RUN cargo build --release --bin openeral \
     && strip /build/target/release/openeral
 
-# Stage 2: Runtime image extending the OpenShell OpenClaw sandbox
-FROM ghcr.io/nvidia/openshell-community/sandboxes/openclaw:latest
+# Stage 2: Runtime image extending the upstream OpenShell base sandbox
+FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 USER root
 

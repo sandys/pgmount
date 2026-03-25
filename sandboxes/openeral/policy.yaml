@@ -1,8 +1,8 @@
 version: "1.0"
 name: openeral
-description: OpenClaw sandbox with PostgreSQL mounted as read-only filesystem at /db
+description: Base sandbox with PostgreSQL mounted as read-only filesystem at /db
 
-extends: openclaw
+extends: base
 
 filesystem:
   read_only:

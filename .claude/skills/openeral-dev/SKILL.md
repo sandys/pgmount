@@ -20,6 +20,17 @@ The product goal is:
 
 When developing this repo, optimize for that end-to-end flow first.
 
+The supported runtime is a coupled 3-image set:
+
+- `cluster`
+  - owns the patched supervisor and bundled manifests
+- `gateway`
+  - owns sandbox pod spec generation and FUSE device requests
+- `sandbox`
+  - owns `openeral`, `fuse3`, and `/etc/fstab`
+
+Do not assume any mixed upstream/openeral image combination is valid.
+
 ## Files That Matter Most
 
 - `crates/openeral-core/src/fs/workspace.rs`
@@ -67,6 +78,7 @@ These tests matter mainly because they protect the Claude persistence path.
 - treat workspace ownership bugs as high severity
 - treat `/dev/fuse` or `/etc/fstab` regressions as product blockers
 - keep the supported user flow to stock `openshell` commands, not wrapper scripts
+- treat cluster, gateway, and sandbox as one version-locked release set
 
 ## Failure Triage
 
