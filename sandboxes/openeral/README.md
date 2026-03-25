@@ -4,14 +4,14 @@ This sandbox exists for one purpose: run Claude Code in OpenShell with a persist
 
 `/db` is mounted too, but it is secondary. The primary success criterion is that Claude writes `~/.claude` into `/home/agent` and that those files survive reconnects.
 
-## Fresh Machine Inputs
+## Fresh Machine Flow
 
-Assume a fresh machine where only these are already available:
+Assume a fresh machine with:
 
 - upstream `openshell`
 - a live PostgreSQL database
-- the published openeral cluster image reference
-- the published openeral sandbox image reference
+- the openeral cluster image reference
+- the openeral sandbox image reference
 - host `ANTHROPIC_API_KEY`
 
 From there, the supported flow is:
@@ -20,12 +20,53 @@ From there, the supported flow is:
 2. create one generic provider for the live database
 3. launch Claude from the sandbox image
 
+### Local Development
+
+If you are developing locally, build and publish both images to a local registry first.
+
+Start a local registry:
+
+```bash
+docker run -d --restart=always -p 5000:5000 --name openshell-local-registry registry:2
+```
+
+Build and push the cluster image:
+
+```bash
+docker build \
+  -f vendor/openshell/deploy/docker/Dockerfile.images \
+  --target cluster \
+  -t 127.0.0.1:5000/openshell/openeral-cluster:dev \
+  vendor/openshell
+
+docker push 127.0.0.1:5000/openshell/openeral-cluster:dev
+```
+
+Build and push the sandbox image:
+
+```bash
+docker build \
+  -f sandboxes/openeral/Dockerfile \
+  -t 127.0.0.1:5000/openshell/openeral-sandbox:dev \
+  .
+
+docker push 127.0.0.1:5000/openshell/openeral-sandbox:dev
+```
+
+Then use:
+
+- `OPENSHELL_CLUSTER_IMAGE=127.0.0.1:5000/openshell/openeral-cluster:dev`
+- `OPENSHELL_REGISTRY_HOST=172.17.0.1:5000`
+- `OPENSHELL_REGISTRY_INSECURE=true`
+- `OPENERAL_SANDBOX_IMAGE=172.17.0.1:5000/openshell/openeral-sandbox:dev`
+
+The cluster image is pulled by host Docker, so `127.0.0.1:5000` is correct there. Sandbox images are pulled from inside the cluster container, so use `172.17.0.1:5000` for the sandbox image reference and registry host.
+
 ## Start Gateway
 
 ```bash
-export OPENSHELL_CLUSTER_IMAGE='<cluster image ref>'
-export OPENSHELL_REGISTRY_HOST='<registry host:port>'
-export OPENSHELL_REGISTRY_INSECURE=true
+export OPENSHELL_CLUSTER_IMAGE='ghcr.io/sandys/openeral-cluster:latest'
+export OPENSHELL_REGISTRY_HOST='ghcr.io'
 export OPENSHELL_GATEWAY_NAME=openeral
 
 openshell gateway start --name "$OPENSHELL_GATEWAY_NAME"
@@ -47,7 +88,7 @@ openshell provider create \
 ## One-Command Launch
 
 ```bash
-export OPENERAL_SANDBOX_IMAGE='<sandbox image ref>'
+export OPENERAL_SANDBOX_IMAGE='ghcr.io/sandys/openeral-sandbox:latest'
 export OPENERAL_SANDBOX_NAME=openeral-demo
 
 set -a
