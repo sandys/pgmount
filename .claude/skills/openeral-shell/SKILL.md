@@ -28,6 +28,16 @@ Persistence is keyed to `OPENSHELL_SANDBOX_ID`:
 
 Important: the persistent workspace is `/home/agent`, not necessarily `~`. Some shells and tools still start with `HOME=/sandbox`. If you need state to persist, write it under `/home/agent` explicitly or launch the tool with `HOME=/home/agent`.
 
+## Claude Auth
+
+The preferred product flow is:
+
+- the gateway already has a generic provider pointing at the live PostgreSQL database
+- the host has `ANTHROPIC_API_KEY`
+- `openshell sandbox create --provider <db-provider> --provider claude --auto-providers -- ...` auto-creates the Claude provider from host env and starts Claude directly
+
+Do not treat `sandbox upload` of local Claude auth files as the default workflow. That is a manual fallback path, not the primary OpenShell flow for this sandbox.
+
 ## Database Layout
 
 ```text
@@ -116,6 +126,9 @@ printf 'findings\n' > /home/agent/projects/analysis/notes.md
 
 # For tools that store state under $HOME
 HOME=/home/agent <tool>
+
+# Claude Code with provider-backed API auth
+HOME=/home/agent claude
 ```
 
 ## Operational Rules

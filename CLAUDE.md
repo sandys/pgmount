@@ -59,6 +59,8 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 
 - **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
 - **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom cluster image plus the published `openeral-sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
+- **Never delete, move, or overwrite user files without explicit permission.** This includes files that appear sensitive, secret-bearing, incorrect, or security-critical.
+- **If a file appears risky, stop and ask first.** Report the concern clearly, but do not remove, rewrite, chmod, or hide the file on your own.
 
 ## Commit Style
 

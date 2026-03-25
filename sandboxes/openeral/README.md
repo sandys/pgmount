@@ -8,35 +8,34 @@ Prebuilt OpenShell sandbox image for mounting PostgreSQL at `/db` and a persiste
 # 1. Install the stock OpenShell CLI
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
 
-# 2. Compose stock openshell commands with shell variables.
+# 2. Infrastructure assumptions:
+# - a gateway is already running with the custom cluster image
+# - a generic provider named "$OPENERAL_DB_PROVIDER" already exists on that gateway
+#   and points at the live PostgreSQL database
+# - the host has ANTHROPIC_API_KEY available
+#
+# Compose stock openshell commands with shell variables.
 # No wrapper scripts are required.
-export OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest
-export OPENERAL_SANDBOX_IMAGE=ghcr.io/<owner>/openeral-sandbox:latest
-export OPENERAL_PROVIDER_NAME=db
+export OPENERAL_SANDBOX_IMAGE='<sandbox image ref>'
+export OPENERAL_DB_PROVIDER=openeral-db
 export OPENERAL_SANDBOX_NAME=openeral-demo
-export OPENERAL_DATABASE_URL='host=pg.example.com user=myuser dbname=mydb'
+set -a
+. ./.env
+set +a
 
-# 3. Start the gateway with the custom cluster image
-openshell gateway start
-
-# 4. Create a provider with PostgreSQL credentials
-openshell provider create \
-  --name "$OPENERAL_PROVIDER_NAME" \
-  --type generic \
-  --credential "DATABASE_URL=$OPENERAL_DATABASE_URL"
-
-# 5. Create a sandbox from the published openeral image
+# 3. One command: create the sandbox, auto-create the Claude provider from host env,
+# mount /db and /home/agent, and run Claude with persistent HOME.
 openshell sandbox create \
   --name "$OPENERAL_SANDBOX_NAME" \
   --from "$OPENERAL_SANDBOX_IMAGE" \
-  --provider "$OPENERAL_PROVIDER_NAME"
-
-# 6. Connect
-openshell sandbox connect "$OPENERAL_SANDBOX_NAME"
-
-# 7. Start Claude with persistent HOME
-HOME=/home/agent claude
+  --provider "$OPENERAL_DB_PROVIDER" \
+  --provider claude \
+  --auto-providers \
+  --no-tty -- env HOME=/home/agent claude
 ```
+
+This is the preferred shippable flow: no wrapper scripts, no `sandbox upload`,
+and no follow-up `sandbox connect` step just to start Claude.
 
 ## How It Works
 
@@ -46,6 +45,10 @@ HOME=/home/agent claude
   - `env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0`
 - OpenShell side-loads `openshell-sandbox`, which reads `/etc/fstab`, resolves the mount sources, and launches `mount.fuse3` before the child process starts.
 - `DATABASE_URL` from the provider is mapped to `OPENERAL_DATABASE_URL` for the FUSE daemon automatically.
+
+The database itself and the OpenShell provider that exposes its `DATABASE_URL`
+are infrastructure prerequisites. The user-facing sandbox launch stays a single
+`openshell sandbox create ...` command.
 
 ## Persistence Model
 
@@ -60,6 +63,7 @@ The database role used by the provider needs:
 
 - `USAGE` on the application schemas it should browse
 - `SELECT` on the application tables it should read
+- either `CREATE` on the database for the first mount, or a pre-created `_openeral` schema
 - write access to the `_openeral` schema for migrations and workspace storage
 
 Example:

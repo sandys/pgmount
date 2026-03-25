@@ -465,7 +465,7 @@ impl Filesystem for WorkspaceFilesystem {
 
     fn create(
         &self,
-        _req: &Request,
+        req: &Request,
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
@@ -506,8 +506,8 @@ impl Filesystem for WorkspaceFilesystem {
             ctime_ns: now_ns,
             atime_ns: now_ns,
             nlink: 1,
-            uid: unsafe { libc::getuid() } as i32,
-            gid: unsafe { libc::getgid() } as i32,
+            uid: req.uid() as i32,
+            gid: req.gid() as i32,
         };
 
         match self.rt.block_on(ws_queries::create_file(&self.pool, &file)) {
@@ -540,7 +540,7 @@ impl Filesystem for WorkspaceFilesystem {
 
     fn mkdir(
         &self,
-        _req: &Request,
+        req: &Request,
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
@@ -580,8 +580,8 @@ impl Filesystem for WorkspaceFilesystem {
             ctime_ns: now_ns,
             atime_ns: now_ns,
             nlink: 2,
-            uid: unsafe { libc::getuid() } as i32,
-            gid: unsafe { libc::getgid() } as i32,
+            uid: req.uid() as i32,
+            gid: req.gid() as i32,
         };
 
         match self.rt.block_on(ws_queries::create_file(&self.pool, &dir)) {

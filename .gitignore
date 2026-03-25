@@ -1,3 +1,4 @@
 .env
 agent-task.txt
 openeral-shell/.env
+target/

@@ -36,22 +36,29 @@ openeral also provides **writable workspaces** — a read-write FUSE filesystem 
 ### Quick start in OpenShell (supported)
 
 ```bash
-# Start a gateway that uses the custom OpenShell cluster image
-OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest \
-  openshell gateway start
+# Infrastructure assumptions:
+# - a gateway is already running with the custom cluster image
+# - a generic provider named "$OPENERAL_DB_PROVIDER" already exists on that gateway
+#   and points at the live PostgreSQL database
+# - the host has ANTHROPIC_API_KEY available
+#
+# Use the exact sandbox image ref you were given.
+export OPENERAL_SANDBOX_IMAGE='<sandbox image ref>'
+export OPENERAL_DB_PROVIDER=openeral-db
+export OPENERAL_SANDBOX_NAME=openeral-demo
+set -a
+. ./.env
+set +a
 
-# Create a provider with PostgreSQL credentials
-openshell provider create --name db --type generic \
-  --credential 'DATABASE_URL=host=pg.example.com user=myuser dbname=mydb'
-
-# Create a sandbox from the published openeral image
+# One command: create the sandbox, auto-create the Claude provider from host env,
+# mount /db and /home/agent, and run Claude with persistent HOME.
 openshell sandbox create \
-  --from ghcr.io/<owner>/openeral-sandbox:latest \
-  --provider db
-
-# Connect, then launch Claude with persistent HOME
-openshell sandbox connect <sandbox-name>
-HOME=/home/agent claude
+  --name "$OPENERAL_SANDBOX_NAME" \
+  --from "$OPENERAL_SANDBOX_IMAGE" \
+  --provider "$OPENERAL_DB_PROVIDER" \
+  --provider claude \
+  --auto-providers \
+  --no-tty -- env HOME=/home/agent claude
 ```
 
 See [sandboxes/openeral/README.md](sandboxes/openeral/README.md) for the supported sandbox flow.
@@ -211,36 +218,34 @@ HOME=/home/agent claude -p "Create a plan for my project" --model claude-sonnet-
 ### In OpenShell
 
 ```bash
-# No wrapper scripts are required. Use stock openshell commands.
-export OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest
-export OPENERAL_SANDBOX_IMAGE=ghcr.io/<owner>/openeral-sandbox:latest
-export OPENERAL_PROVIDER_NAME=db
+# Assumptions:
+# - a gateway is already running with the custom cluster image
+# - a generic provider named "$OPENERAL_DB_PROVIDER" already exists on that gateway
+#   and points at the live PostgreSQL database
+# - the host has ANTHROPIC_API_KEY available
+export OPENERAL_SANDBOX_IMAGE='<sandbox image ref>'
+export OPENERAL_DB_PROVIDER=openeral-db
 export OPENERAL_SANDBOX_NAME=openeral-demo
-export OPENERAL_DATABASE_URL='host=pg.example.com user=myuser dbname=mydb'
+set -a
+. ./.env
+set +a
 
-# Start the gateway with the custom cluster image
-openshell gateway start
-
-# Create a provider with PostgreSQL credentials
-openshell provider create \
-  --name "$OPENERAL_PROVIDER_NAME" \
-  --type generic \
-  --credential "DATABASE_URL=$OPENERAL_DATABASE_URL"
-
-# Create a sandbox from the published openeral image
+# One command: create the sandbox, auto-create the Claude provider from host env,
+# mount /db and /home/agent, and run Claude with persistent HOME.
 openshell sandbox create \
   --name "$OPENERAL_SANDBOX_NAME" \
   --from "$OPENERAL_SANDBOX_IMAGE" \
-  --provider "$OPENERAL_PROVIDER_NAME"
-
-# Connect, then run tools with HOME on the persistent workspace
-openshell sandbox connect "$OPENERAL_SANDBOX_NAME"
-HOME=/home/agent claude
+  --provider "$OPENERAL_DB_PROVIDER" \
+  --provider claude \
+  --auto-providers \
+  --no-tty -- env HOME=/home/agent claude
 ```
 
 The custom cluster image deploys the FUSE device plugin and configures the gateway to request `github.com/fuse` for sandbox pods. The sandbox image declares `/db` and `/home/agent` in `/etc/fstab`, and the side-loaded OpenShell supervisor mounts both before launching the child process.
 
 `/db` is read-only. `/home/agent` is read-write and keyed to `OPENSHELL_SANDBOX_ID`, so each sandbox object gets its own persistent workspace. Reconnecting to the same sandbox preserves state; deleting and recreating a sandbox creates a fresh workspace.
+
+For infrastructure setup, the live database and the OpenShell provider that exposes its `DATABASE_URL` are treated as out-of-band prerequisites. The user-facing launch path above stays a single `openshell` command.
 
 ### What persists
 
@@ -271,7 +276,12 @@ For end users, the supported path is the published sandbox image plus the custom
 
 On first mount, openeral creates an internal `_openeral` schema for audit logging, cache hints, and workspace storage. Migrations are managed by [refinery](https://github.com/rust-db/refinery).
 
-The database user needs write access to `_openeral`:
+The database user needs either:
+
+- `CREATE` on the database so the first mount can create `_openeral`, or
+- a pre-created `_openeral` schema plus write access to it
+
+For an existing `_openeral` schema, grant:
 
 ```sql
 GRANT ALL ON SCHEMA _openeral TO your_role;
