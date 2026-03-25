@@ -1,7 +1,7 @@
-use crate::error::FsError;
-use crate::fs::inode::{NodeIdentity, FilterStage};
-use crate::fs::nodes::{DirEntry, NodeContext};
 use crate::db::queries::{introspection, rows};
+use crate::error::FsError;
+use crate::fs::inode::{FilterStage, NodeIdentity};
+use crate::fs::nodes::{DirEntry, NodeContext};
 
 pub async fn lookup_root(
     schema: &str,
@@ -14,7 +14,9 @@ pub async fn lookup_root(
         Ok(NodeIdentity::FilterDir {
             schema: schema.to_string(),
             table: table.to_string(),
-            stage: FilterStage::Column { column: name.to_string() },
+            stage: FilterStage::Column {
+                column: name.to_string(),
+            },
         })
     } else {
         Err(FsError::NotFound)
@@ -28,15 +30,20 @@ pub async fn readdir_root(
     ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
     let columns = introspection::list_columns(ctx.pool, schema, table).await?;
-    Ok(columns.iter().map(|c| DirEntry {
-        name: c.name.clone(),
-        identity: NodeIdentity::FilterDir {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            stage: FilterStage::Column { column: c.name.clone() },
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+    Ok(columns
+        .iter()
+        .map(|c| DirEntry {
+            name: c.name.clone(),
+            identity: NodeIdentity::FilterDir {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                stage: FilterStage::Column {
+                    column: c.name.clone(),
+                },
+            },
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }
 
 pub async fn lookup_column(
@@ -102,19 +109,28 @@ pub async fn readdir_value(
     let filter_value_param: &(dyn tokio_postgres::types::ToSql + Sync) = &value.to_string();
 
     let filtered = rows::query_rows(
-        ctx.pool, schema, table, &pk.column_names,
-        ctx.config.page_size as i64, 0,
-        Some(&where_clause), None,
+        ctx.pool,
+        schema,
+        table,
+        &pk.column_names,
+        ctx.config.page_size as i64,
+        0,
+        Some(&where_clause),
+        None,
         &[filter_value_param],
-    ).await?;
+    )
+    .await?;
 
-    Ok(filtered.iter().map(|row_id| DirEntry {
-        name: row_id.display_name.clone(),
-        identity: NodeIdentity::Row {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            pk_display: row_id.display_name.clone(),
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+    Ok(filtered
+        .iter()
+        .map(|row_id| DirEntry {
+            name: row_id.display_name.clone(),
+            identity: NodeIdentity::Row {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                pk_display: row_id.display_name.clone(),
+            },
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }

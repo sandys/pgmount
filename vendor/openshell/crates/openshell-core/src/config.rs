@@ -84,6 +84,12 @@ pub struct Config {
     /// allowing them to reach services running on the Docker host.
     #[serde(default)]
     pub host_gateway_ip: String,
+
+    /// Extended resource name to request on sandbox pods for FUSE device injection.
+    /// When set (for example `github.com/fuse`), the gateway adds a container
+    /// resource limit of `1`, which triggers kubelet device-plugin allocation.
+    #[serde(default)]
+    pub sandbox_fuse_resource_name: String,
 }
 
 /// TLS configuration.
@@ -133,6 +139,7 @@ impl Config {
             ssh_session_ttl_secs: default_ssh_session_ttl_secs(),
             client_tls_secret_name: String::new(),
             host_gateway_ip: String::new(),
+            sandbox_fuse_resource_name: String::new(),
         }
     }
 
@@ -245,6 +252,13 @@ impl Config {
     #[must_use]
     pub fn with_host_gateway_ip(mut self, ip: impl Into<String>) -> Self {
         self.host_gateway_ip = ip.into();
+        self
+    }
+
+    /// Set the extended resource name requested on sandbox pods for FUSE.
+    #[must_use]
+    pub fn with_sandbox_fuse_resource_name(mut self, name: impl Into<String>) -> Self {
+        self.sandbox_fuse_resource_name = name.into();
         self
     }
 }

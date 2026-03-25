@@ -97,6 +97,12 @@ struct Args {
     #[arg(long, env = "OPENSHELL_HOST_GATEWAY_IP")]
     host_gateway_ip: Option<String>,
 
+    /// Extended resource name to request on sandbox pods for FUSE device injection.
+    /// When set (for example `github.com/fuse`), the gateway adds a container
+    /// resource limit of `1` to every sandbox pod.
+    #[arg(long, env = "OPENSHELL_SANDBOX_FUSE_RESOURCE_NAME")]
+    sandbox_fuse_resource_name: Option<String>,
+
     /// Disable TLS entirely — listen on plaintext HTTP.
     /// Use this when the gateway sits behind a reverse proxy or tunnel
     /// (e.g. Cloudflare Tunnel) that terminates TLS at the edge.
@@ -186,6 +192,10 @@ async fn main() -> Result<()> {
 
     if let Some(ip) = args.host_gateway_ip {
         config = config.with_host_gateway_ip(ip);
+    }
+
+    if let Some(name) = args.sandbox_fuse_resource_name {
+        config = config.with_sandbox_fuse_resource_name(name);
     }
 
     if args.disable_tls {

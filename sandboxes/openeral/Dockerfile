@@ -15,8 +15,8 @@ COPY crates/ crates/
 RUN cargo build --release --bin openeral \
     && strip /build/target/release/openeral
 
-# Stage 2: Runtime image extending the OpenClaw sandbox
-FROM ghcr.io/openshell-community/sandbox-openclaw:latest
+# Stage 2: Runtime image extending the OpenShell OpenClaw sandbox
+FROM ghcr.io/nvidia/openshell-community/sandboxes/openclaw:latest
 
 USER root
 
@@ -32,13 +32,15 @@ COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
 # Allow non-root FUSE mounts
 RUN echo "user_allow_other" >> /etc/fuse.conf
 
-# Create mount points
-RUN mkdir -p /db /home/agent
+# Create mount points and declare supervisor-managed FUSE mounts.
+# OpenShell overrides the container command to run `openshell-sandbox`, which
+# reads `/etc/fstab` and mounts `fuse.*` entries marked `noauto` before
+# spawning the sandboxed child process.
+RUN mkdir -p /db /home/agent && \
+    printf '%s\n' \
+      'env /db fuse.openeral ro,allow_other,noauto 0 0' \
+      'env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0' \
+      >> /etc/fstab
 
-# Copy entrypoint and skills
-COPY sandboxes/openeral/openeral-start.sh /usr/local/bin/openeral-start.sh
-RUN chmod +x /usr/local/bin/openeral-start.sh
-
-COPY sandboxes/openeral/skills/ /sandbox/.skills/
-
-ENTRYPOINT ["openeral-start.sh"]
+# Ship project-local skills into the sandbox home.
+COPY .claude/skills/ /sandbox/.skills/

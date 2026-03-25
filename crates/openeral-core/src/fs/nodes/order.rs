@@ -1,7 +1,7 @@
+use crate::db::queries::{introspection, rows};
 use crate::error::FsError;
 use crate::fs::inode::{NodeIdentity, OrderStage};
 use crate::fs::nodes::{DirEntry, NodeContext};
-use crate::db::queries::{introspection, rows};
 
 pub async fn lookup_root(
     schema: &str,
@@ -14,7 +14,9 @@ pub async fn lookup_root(
         Ok(NodeIdentity::OrderDir {
             schema: schema.to_string(),
             table: table.to_string(),
-            stage: OrderStage::Column { column: name.to_string() },
+            stage: OrderStage::Column {
+                column: name.to_string(),
+            },
         })
     } else {
         Err(FsError::NotFound)
@@ -28,15 +30,20 @@ pub async fn readdir_root(
     ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
     let columns = introspection::list_columns(ctx.pool, schema, table).await?;
-    Ok(columns.iter().map(|c| DirEntry {
-        name: c.name.clone(),
-        identity: NodeIdentity::OrderDir {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            stage: OrderStage::Column { column: c.name.clone() },
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+    Ok(columns
+        .iter()
+        .map(|c| DirEntry {
+            name: c.name.clone(),
+            identity: NodeIdentity::OrderDir {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                stage: OrderStage::Column {
+                    column: c.name.clone(),
+                },
+            },
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }
 
 pub async fn lookup_column(
@@ -66,18 +73,21 @@ pub async fn readdir_column(
     _offset: i64,
     _ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
-    Ok(["asc", "desc"].iter().map(|dir| DirEntry {
-        name: dir.to_string(),
-        identity: NodeIdentity::OrderDir {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            stage: OrderStage::Direction {
-                column: column.to_string(),
-                dir: dir.to_string(),
+    Ok(["asc", "desc"]
+        .iter()
+        .map(|dir| DirEntry {
+            name: dir.to_string(),
+            identity: NodeIdentity::OrderDir {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                stage: OrderStage::Direction {
+                    column: column.to_string(),
+                    dir: dir.to_string(),
+                },
             },
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }
 
 pub async fn lookup_direction(
@@ -112,19 +122,28 @@ pub async fn readdir_direction(
     let order_clause = format!("{} {}", crate::db::queries::quote_ident(column), dir_sql);
 
     let ordered = rows::query_rows(
-        ctx.pool, schema, table, &pk.column_names,
-        ctx.config.page_size as i64, 0,
-        None, Some(&order_clause),
+        ctx.pool,
+        schema,
+        table,
+        &pk.column_names,
+        ctx.config.page_size as i64,
+        0,
+        None,
+        Some(&order_clause),
         &[],
-    ).await?;
+    )
+    .await?;
 
-    Ok(ordered.iter().map(|row_id| DirEntry {
-        name: row_id.display_name.clone(),
-        identity: NodeIdentity::Row {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            pk_display: row_id.display_name.clone(),
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+    Ok(ordered
+        .iter()
+        .map(|row_id| DirEntry {
+            name: row_id.display_name.clone(),
+            identity: NodeIdentity::Row {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                pk_display: row_id.display_name.clone(),
+            },
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }

@@ -1,5 +1,5 @@
-use clap::Args;
 use crate::error::FsError;
+use clap::Args;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -18,7 +18,10 @@ pub async fn execute(args: UnmountArgs) -> Result<(), FsError> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FsError::InternalError(format!("Unmount failed: {}", stderr)));
+        return Err(FsError::InternalError(format!(
+            "Unmount failed: {}",
+            stderr
+        )));
     }
 
     tracing::info!(mount_point = %args.mount_point.display(), "Unmounted successfully");

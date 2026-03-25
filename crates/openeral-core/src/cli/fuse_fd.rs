@@ -22,8 +22,8 @@ use crate::db::migrate;
 use crate::db::pool::create_pool;
 use crate::db::queries::workspace as ws_queries;
 use crate::error::FsError;
-use crate::fs::PgmountFilesystem;
 use crate::fs::workspace::WorkspaceFilesystem;
+use crate::fs::PgmountFilesystem;
 
 const KNOWN_SUBCOMMANDS: &[&str] = &["mount", "unmount", "list", "version", "workspace", "help"];
 
@@ -131,7 +131,8 @@ pub async fn execute() -> Result<(), FsError> {
 
     if args.len() < 3 {
         return Err(FsError::InvalidArgument(
-            "mount.fuse3 invocation requires: openeral <source> <mountpoint> [-o options]".to_string(),
+            "mount.fuse3 invocation requires: openeral <source> <mountpoint> [-o options]"
+                .to_string(),
         ));
     }
 
@@ -161,7 +162,11 @@ async fn execute_database(
     read_only: bool,
     mount_mode: MountMode,
 ) -> Result<(), FsError> {
-    let cli_arg = if conn_str.is_empty() { None } else { Some(conn_str.as_str()) };
+    let cli_arg = if conn_str.is_empty() {
+        None
+    } else {
+        Some(conn_str.as_str())
+    };
     let conn_str = resolve_connection_string(cli_arg, "OPENERAL_DATABASE_URL")?;
 
     let mount_point_str = match &mount_mode {
@@ -183,12 +188,14 @@ async fn execute_database(
     let pool = create_pool(&conn_str, config.statement_timeout_secs)?;
 
     // Test connection
-    let client = pool.get().await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection failed: {}", e))
-    })?;
-    client.execute("SELECT 1", &[]).await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection test failed: {}", e))
-    })?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection failed: {}", e)))?;
+    client
+        .execute("SELECT 1", &[])
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
     drop(client);
     info!("Connection verified");
 
@@ -204,17 +211,23 @@ async fn execute_workspace(
     workspace_id: String,
     mount_mode: MountMode,
 ) -> Result<(), FsError> {
-    let cli_arg = if conn_str.is_empty() { None } else { Some(conn_str.as_str()) };
+    let cli_arg = if conn_str.is_empty() {
+        None
+    } else {
+        Some(conn_str.as_str())
+    };
     let conn_str = resolve_connection_string(cli_arg, "OPENERAL_DATABASE_URL")?;
     let pool = create_pool(&conn_str, 30)?;
 
     // Test connection
-    let client = pool.get().await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection failed: {}", e))
-    })?;
-    client.execute("SELECT 1", &[]).await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection test failed: {}", e))
-    })?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection failed: {}", e)))?;
+    client
+        .execute("SELECT 1", &[])
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
     drop(client);
 
     migrate::run_migrations(&pool).await?;
@@ -225,7 +238,13 @@ async fn execute_workspace(
         Err(_) => {
             info!(workspace_id = %workspace_id, "Workspace not found, creating");
             let default_layout = crate::db::types::WorkspaceLayout::default();
-            ws_queries::create_workspace(&pool, &workspace_id, Some(&workspace_id), &default_layout).await?;
+            ws_queries::create_workspace(
+                &pool,
+                &workspace_id,
+                Some(&workspace_id),
+                &default_layout,
+            )
+            .await?;
             ws_queries::seed_from_config(&pool, &workspace_id, &default_layout).await?;
             ws_queries::get_workspace(&pool, &workspace_id).await?
         }
@@ -267,12 +286,9 @@ async fn run_fuse_session<FS: fuser::Filesystem + Send + 'static>(
             let fuse_config = fuser::Config::default();
 
             let handle = tokio::task::spawn_blocking(move || {
-                let session = fuser::Session::from_fd(
-                    fs,
-                    fuse_fd,
-                    fuser::SessionACL::All,
-                    fuse_config,
-                ).map_err(FsError::IoError)?;
+                let session =
+                    fuser::Session::from_fd(fs, fuse_fd, fuser::SessionACL::All, fuse_config)
+                        .map_err(FsError::IoError)?;
 
                 let _bg = session.spawn().map_err(FsError::IoError)?;
 
@@ -302,8 +318,7 @@ async fn run_fuse_session<FS: fuser::Filesystem + Send + 'static>(
             fuse_config.acl = fuser::SessionACL::All;
 
             let handle = tokio::task::spawn_blocking(move || {
-                fuser::mount2(fs, &mount_point, &fuse_config)
-                    .map_err(FsError::IoError)
+                fuser::mount2(fs, &mount_point, &fuse_config).map_err(FsError::IoError)
             });
 
             handle

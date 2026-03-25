@@ -34,7 +34,12 @@ pub async fn read(
         "json" => crate::format::json::format_row(&row_data)?,
         "csv" => crate::format::csv::format_row(&row_data)?,
         "yaml" => crate::format::yaml::format_row(&row_data)?,
-        _ => return Err(FsError::InvalidArgument(format!("Unknown format: {}", format))),
+        _ => {
+            return Err(FsError::InvalidArgument(format!(
+                "Unknown format: {}",
+                format
+            )))
+        }
     };
 
     let bytes = content.as_bytes();

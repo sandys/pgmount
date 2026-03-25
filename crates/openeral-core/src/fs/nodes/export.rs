@@ -1,7 +1,7 @@
+use crate::db::queries::rows;
 use crate::error::FsError;
 use crate::fs::inode::NodeIdentity;
 use crate::fs::nodes::{DirEntry, NodeContext};
-use crate::db::queries::rows;
 
 const EXPORT_FORMATS: &[&str] = &["json", "csv", "yaml"];
 
@@ -32,8 +32,9 @@ pub async fn readdir(
     _offset: i64,
     _ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
-    Ok(EXPORT_FORMATS.iter().map(|fmt| {
-        DirEntry {
+    Ok(EXPORT_FORMATS
+        .iter()
+        .map(|fmt| DirEntry {
             name: format!("data.{}", fmt),
             identity: NodeIdentity::ExportDir {
                 schema: schema.to_string(),
@@ -41,8 +42,8 @@ pub async fn readdir(
                 format: fmt.to_string(),
             },
             kind: fuser::FileType::Directory,
-        }
-    }).collect())
+        })
+        .collect())
 }
 
 /// Lookup in .export/data.json/ — page_1.json, page_2.json, etc
@@ -80,13 +81,19 @@ pub async fn readdir_export_dir(
     _offset: i64,
     ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
-    let count = crate::db::queries::stats::get_exact_row_count(ctx.pool, schema, table_name).await.unwrap_or(0);
+    let count = crate::db::queries::stats::get_exact_row_count(ctx.pool, schema, table_name)
+        .await
+        .unwrap_or(0);
     let page_size = ctx.config.page_size as i64;
-    let num_pages = if count == 0 { 1 } else { ((count - 1) / page_size) + 1 };
+    let num_pages = if count == 0 {
+        1
+    } else {
+        ((count - 1) / page_size) + 1
+    };
     // Always show at least page_1 even if empty (for discoverability)
 
-    Ok((1..=num_pages).map(|p| {
-        DirEntry {
+    Ok((1..=num_pages)
+        .map(|p| DirEntry {
             name: format!("page_{}.{}", p, format),
             identity: NodeIdentity::ExportPageFile {
                 schema: schema.to_string(),
@@ -95,8 +102,8 @@ pub async fn readdir_export_dir(
                 page: p as u64,
             },
             kind: fuser::FileType::RegularFile,
-        }
-    }).collect())
+        })
+        .collect())
 }
 
 /// Read a page of exported data
@@ -112,16 +119,19 @@ pub async fn read_export_page(
     let page_size = ctx.config.page_size as i64;
     let row_offset = ((page as i64) - 1) * page_size;
 
-    let (_col_names, all_rows) = rows::get_all_rows_as_text(
-        ctx.pool, schema, table_name,
-        page_size, row_offset,
-    ).await?;
+    let (_col_names, all_rows) =
+        rows::get_all_rows_as_text(ctx.pool, schema, table_name, page_size, row_offset).await?;
 
     let content = match format {
         "json" => crate::format::json::format_rows(&all_rows)?,
         "csv" => crate::format::csv::format_rows(&all_rows)?,
         "yaml" => crate::format::yaml::format_rows(&all_rows)?,
-        _ => return Err(FsError::InvalidArgument(format!("Unknown format: {}", format))),
+        _ => {
+            return Err(FsError::InvalidArgument(format!(
+                "Unknown format: {}",
+                format
+            )))
+        }
     };
 
     let bytes = content.as_bytes();

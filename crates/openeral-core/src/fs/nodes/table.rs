@@ -69,9 +69,15 @@ pub async fn readdir(
     // Calculate number of pages
     let pk = get_pk(schema, table, ctx).await?;
     if !pk.column_names.is_empty() {
-        let count = crate::db::queries::stats::get_exact_row_count(ctx.pool, schema, table).await.unwrap_or(0);
+        let count = crate::db::queries::stats::get_exact_row_count(ctx.pool, schema, table)
+            .await
+            .unwrap_or(0);
         let page_size = ctx.config.page_size as i64;
-        let num_pages = if count == 0 { 0 } else { ((count - 1) / page_size) + 1 };
+        let num_pages = if count == 0 {
+            0
+        } else {
+            ((count - 1) / page_size) + 1
+        };
         for p in 1..=num_pages {
             entries.push(DirEntry {
                 name: format!("page_{}", p),
@@ -88,7 +94,11 @@ pub async fn readdir(
     Ok(entries)
 }
 
-pub(crate) async fn get_pk(schema: &str, table: &str, ctx: &NodeContext<'_>) -> Result<PrimaryKeyInfo, FsError> {
+pub(crate) async fn get_pk(
+    schema: &str,
+    table: &str,
+    ctx: &NodeContext<'_>,
+) -> Result<PrimaryKeyInfo, FsError> {
     if let Some(cached) = ctx.cache.get_primary_key(schema, table) {
         return Ok(cached);
     }

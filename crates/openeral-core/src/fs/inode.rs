@@ -6,40 +6,113 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum NodeIdentity {
     Root,
-    Schema { name: String },
-    Table { schema: String, table: String },
+    Schema {
+        name: String,
+    },
+    Table {
+        schema: String,
+        table: String,
+    },
     /// Special directories under a table (like .filter, .order, .info, .export, etc.)
-    SpecialDir { schema: String, table: String, kind: SpecialDirKind },
+    SpecialDir {
+        schema: String,
+        table: String,
+        kind: SpecialDirKind,
+    },
     /// A row directory named by its PK value(s)
-    Row { schema: String, table: String, pk_display: String },
+    Row {
+        schema: String,
+        table: String,
+        pk_display: String,
+    },
     /// A column file inside a row directory
-    Column { schema: String, table: String, pk_display: String, column: String },
+    Column {
+        schema: String,
+        table: String,
+        pk_display: String,
+        column: String,
+    },
     /// Full-row file in a format (row.json, row.csv, row.yaml)
-    RowFile { schema: String, table: String, pk_display: String, format: String },
+    RowFile {
+        schema: String,
+        table: String,
+        pk_display: String,
+        format: String,
+    },
     /// Filter directory stages: .filter/ -> .filter/<col>/ -> .filter/<col>/<value>/
-    FilterDir { schema: String, table: String, stage: FilterStage },
+    FilterDir {
+        schema: String,
+        table: String,
+        stage: FilterStage,
+    },
     /// Order directory stages
-    OrderDir { schema: String, table: String, stage: OrderStage },
+    OrderDir {
+        schema: String,
+        table: String,
+        stage: OrderStage,
+    },
     /// .first/<N>/ or .last/<N>/ directories
-    LimitDir { schema: String, table: String, kind: LimitKind, n: u64 },
+    LimitDir {
+        schema: String,
+        table: String,
+        kind: LimitKind,
+        n: u64,
+    },
     /// .by/<column>/<value>/ index lookup
-    ByIndexDir { schema: String, table: String, stage: ByIndexStage },
+    ByIndexDir {
+        schema: String,
+        table: String,
+        stage: ByIndexStage,
+    },
     /// Files inside .info/ directory
-    InfoFile { schema: String, table: String, filename: String },
+    InfoFile {
+        schema: String,
+        table: String,
+        filename: String,
+    },
     /// Files inside .export/ directory
-    ExportFile { schema: String, table: String, format: String },
+    ExportFile {
+        schema: String,
+        table: String,
+        format: String,
+    },
     /// Paginated row directory: page_1/, page_2/, etc under a table
-    PageDir { schema: String, table: String, page: u64 },
+    PageDir {
+        schema: String,
+        table: String,
+        page: u64,
+    },
     /// Paginated export file: page_1.json etc under .export/data.json/
-    ExportPageFile { schema: String, table: String, format: String, page: u64 },
+    ExportPageFile {
+        schema: String,
+        table: String,
+        format: String,
+        page: u64,
+    },
     /// Directory for paginated export: .export/data.json/ (is now a dir, not a file)
-    ExportDir { schema: String, table: String, format: String },
+    ExportDir {
+        schema: String,
+        table: String,
+        format: String,
+    },
     /// .indexes/ directory and children
-    IndexDir { schema: String, table: String },
-    IndexFile { schema: String, table: String, index_name: String },
+    IndexDir {
+        schema: String,
+        table: String,
+    },
+    IndexFile {
+        schema: String,
+        table: String,
+        index_name: String,
+    },
     /// .views/ directory and children
-    ViewsDir { schema: String },
-    View { schema: String, view_name: String },
+    ViewsDir {
+        schema: String,
+    },
+    View {
+        schema: String,
+        view_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -59,13 +132,13 @@ pub enum SpecialDirKind {
 pub enum FilterStage {
     Root,                                    // .filter/
     Column { column: String },               // .filter/<col>/
-    Value { column: String, value: String },  // .filter/<col>/<value>/
+    Value { column: String, value: String }, // .filter/<col>/<value>/
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum OrderStage {
-    Root,                                    // .order/
-    Column { column: String },               // .order/<col>/
+    Root,                                      // .order/
+    Column { column: String },                 // .order/<col>/
     Direction { column: String, dir: String }, // .order/<col>/asc or desc/
 }
 
@@ -77,9 +150,9 @@ pub enum LimitKind {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ByIndexStage {
-    Root,                                     // .by/
-    Column { column: String },                // .by/<col>/
-    Value { column: String, value: String },   // .by/<col>/<value>/
+    Root,                                    // .by/
+    Column { column: String },               // .by/<col>/
+    Value { column: String, value: String }, // .by/<col>/<value>/
 }
 
 /// Maps NodeIdentity -> inode number and vice versa.

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-For **using** openeral without developing it, see `openeral-shell/`.
+For **using** openeral without developing it, see `sandboxes/openeral/README.md`.
 
 ## Build & Test
 
@@ -35,9 +35,11 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 - `crates/openeral/` — binary crate (thin CLI entry point)
 - `crates/openeral-core/` — library crate (all logic: FUSE filesystem, DB queries, CLI commands)
 - `crates/openeral-core/migrations/` — SQL migrations (V1–V4), managed by refinery
-- `openeral-shell/` — OpenShell sandbox for running AI agents with persistent state
-- `sandboxes/openeral/` — OpenShell container image (OpenClaw-based, legacy)
-- `Dockerfile` — Production image for openeral-shell (build context: repo root)
+- `openeral-shell/` — legacy entrypoint-based sandbox path kept for reference; not the supported OpenShell flow
+- `sandboxes/openeral/` — current OpenShell sandbox image (OpenClaw-based, supervisor-managed via `/etc/fstab`)
+- `vendor/openshell/` — vendored OpenShell fork used to build the custom cluster image
+- `.github/workflows/build-cluster.yml` — publishes `openeral-cluster`
+- `.github/workflows/build-sandbox.yml` — publishes `openeral-sandbox`
 - `tests/test_fuse_mount.sh` — FUSE mount integration tests (bash)
 
 ## Two Filesystems
@@ -56,6 +58,7 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 ## Hard Rules
 
 - **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
+- **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom cluster image plus the published `openeral-sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
 
 ## Commit Style
 

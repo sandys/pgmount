@@ -1,6 +1,6 @@
 use openeral_core::db::migrate;
 use openeral_core::db::pool::create_pool;
-use openeral_core::db::queries::{introspection, rows, stats, indexes};
+use openeral_core::db::queries::{indexes, introspection, rows, stats};
 use openeral_core::fs::cache::MetadataCache;
 use openeral_core::fs::inode::{InodeTable, NodeIdentity};
 use std::time::Duration;
@@ -15,9 +15,12 @@ fn connection_string() -> String {
 
 /// Ensure test schema exists. Uses tokio::sync::OnceCell for async-safe one-time init.
 async fn setup_db(pool: &deadpool_postgres::Pool) {
-    SETUP_CELL.get_or_init(|| async {
-        let client = pool.get().await.unwrap();
-        client.batch_execute("
+    SETUP_CELL
+        .get_or_init(|| async {
+            let client = pool.get().await.unwrap();
+            client
+                .batch_execute(
+                    "
             DROP SCHEMA IF EXISTS rust_test CASCADE;
             CREATE SCHEMA rust_test;
             CREATE TABLE rust_test.users (
@@ -34,8 +37,12 @@ async fn setup_db(pool: &deadpool_postgres::Pool) {
                 (2, 'Bob', 'bob@example.com', 25, false),
                 (3, 'Charlie', 'charlie@example.com', 35, true);
             ANALYZE rust_test.users;
-        ").await.unwrap();
-    }).await;
+        ",
+                )
+                .await
+                .unwrap();
+        })
+        .await;
 }
 
 async fn get_pool() -> deadpool_postgres::Pool {
@@ -90,7 +97,9 @@ async fn test_primary_key() {
 async fn test_list_rows() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
-    let row_ids = rows::list_rows(&pool, S, T, &pk_columns, 100, 0).await.unwrap();
+    let row_ids = rows::list_rows(&pool, S, T, &pk_columns, 100, 0)
+        .await
+        .unwrap();
     assert_eq!(row_ids.len(), 3);
     assert_eq!(row_ids[0].display_name, "1");
     assert_eq!(row_ids[1].display_name, "2");
@@ -101,11 +110,15 @@ async fn test_list_rows() {
 async fn test_list_rows_pagination() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
-    let page1 = rows::list_rows(&pool, S, T, &pk_columns, 2, 0).await.unwrap();
+    let page1 = rows::list_rows(&pool, S, T, &pk_columns, 2, 0)
+        .await
+        .unwrap();
     assert_eq!(page1.len(), 2);
     assert_eq!(page1[0].display_name, "1");
     assert_eq!(page1[1].display_name, "2");
-    let page2 = rows::list_rows(&pool, S, T, &pk_columns, 2, 2).await.unwrap();
+    let page2 = rows::list_rows(&pool, S, T, &pk_columns, 2, 2)
+        .await
+        .unwrap();
     assert_eq!(page2.len(), 1);
     assert_eq!(page2[0].display_name, "3");
 }
@@ -115,7 +128,9 @@ async fn test_get_row_data() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
     let pk_values = vec!["1".to_string()];
-    let row_data = rows::get_row_data(&pool, S, T, &pk_columns, &pk_values).await.unwrap();
+    let row_data = rows::get_row_data(&pool, S, T, &pk_columns, &pk_values)
+        .await
+        .unwrap();
     let data_map: std::collections::HashMap<&str, Option<&str>> = row_data
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_deref()))
@@ -140,7 +155,9 @@ async fn test_get_column_value() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
     let pk_values = vec!["2".to_string()];
-    let value = rows::get_column_value(&pool, S, T, "name", &pk_columns, &pk_values).await.unwrap();
+    let value = rows::get_column_value(&pool, S, T, "name", &pk_columns, &pk_values)
+        .await
+        .unwrap();
     assert_eq!(value, Some("Bob".to_string()));
 }
 
@@ -148,15 +165,22 @@ async fn test_get_column_value() {
 async fn test_get_column_value_null() {
     let pool = get_pool().await;
     let client = pool.get().await.unwrap();
-    client.batch_execute("
+    client
+        .batch_execute(
+            "
         CREATE TABLE IF NOT EXISTS rust_test.null_test (id INTEGER PRIMARY KEY, val TEXT);
         TRUNCATE rust_test.null_test;
         INSERT INTO rust_test.null_test (id, val) VALUES (1, NULL);
-    ").await.unwrap();
+    ",
+        )
+        .await
+        .unwrap();
 
     let pk_columns = vec!["id".to_string()];
     let pk_values = vec!["1".to_string()];
-    let value = rows::get_column_value(&pool, S, "null_test", "val", &pk_columns, &pk_values).await.unwrap();
+    let value = rows::get_column_value(&pool, S, "null_test", "val", &pk_columns, &pk_values)
+        .await
+        .unwrap();
     assert_eq!(value, None);
 }
 
@@ -193,7 +217,9 @@ async fn test_inode_table() {
     assert!(matches!(table.get_identity(1), Some(NodeIdentity::Root)));
 
     // New identity gets a new inode
-    let schema_id = NodeIdentity::Schema { name: "public".to_string() };
+    let schema_id = NodeIdentity::Schema {
+        name: "public".to_string(),
+    };
     let ino = table.get_or_insert(schema_id.clone());
     assert!(ino >= 2);
 
@@ -202,7 +228,9 @@ async fn test_inode_table() {
     assert_eq!(ino, ino2);
 
     // Different identity gets different inode
-    let other = NodeIdentity::Schema { name: "other".to_string() };
+    let other = NodeIdentity::Schema {
+        name: "other".to_string(),
+    };
     let ino3 = table.get_or_insert(other);
     assert_ne!(ino, ino3);
 
@@ -218,7 +246,9 @@ async fn test_metadata_cache() {
     assert!(cache.get_schemas().is_none());
     assert!(cache.get_tables("public").is_none());
 
-    let schemas = vec![openeral_core::db::types::SchemaInfo { name: "public".to_string() }];
+    let schemas = vec![openeral_core::db::types::SchemaInfo {
+        name: "public".to_string(),
+    }];
     cache.set_schemas(schemas);
     let cached = cache.get_schemas().unwrap();
     assert_eq!(cached.len(), 1);
@@ -231,11 +261,16 @@ async fn test_metadata_cache() {
 #[tokio::test]
 async fn test_metadata_cache_ttl_expiry() {
     let cache = MetadataCache::new(Duration::from_millis(50));
-    let schemas = vec![openeral_core::db::types::SchemaInfo { name: "x".to_string() }];
+    let schemas = vec![openeral_core::db::types::SchemaInfo {
+        name: "x".to_string(),
+    }];
     cache.set_schemas(schemas);
     assert!(cache.get_schemas().is_some());
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(cache.get_schemas().is_none(), "Cache should expire after TTL");
+    assert!(
+        cache.get_schemas().is_none(),
+        "Cache should expire after TTL"
+    );
 }
 
 #[tokio::test]
@@ -288,9 +323,18 @@ async fn test_format_yaml() {
 
 #[tokio::test]
 async fn test_quote_ident() {
-    assert_eq!(openeral_core::db::queries::quote_ident("simple"), "\"simple\"");
-    assert_eq!(openeral_core::db::queries::quote_ident("has\"quote"), "\"has\"\"quote\"");
-    assert_eq!(openeral_core::db::queries::quote_ident("with space"), "\"with space\"");
+    assert_eq!(
+        openeral_core::db::queries::quote_ident("simple"),
+        "\"simple\""
+    );
+    assert_eq!(
+        openeral_core::db::queries::quote_ident("has\"quote"),
+        "\"has\"\"quote\""
+    );
+    assert_eq!(
+        openeral_core::db::queries::quote_ident("with space"),
+        "\"with space\""
+    );
 }
 
 #[tokio::test]
@@ -337,7 +381,19 @@ async fn test_query_rows_with_filter() {
     let where_clause = "\"active\"::text = $1";
     let filter_val = "true".to_string();
     let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&filter_val];
-    let result = rows::query_rows(&pool, S, T, &pk_columns, 100, 0, Some(where_clause), None, &params).await.unwrap();
+    let result = rows::query_rows(
+        &pool,
+        S,
+        T,
+        &pk_columns,
+        100,
+        0,
+        Some(where_clause),
+        None,
+        &params,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.len(), 2); // Alice and Charlie are active
 }
 
@@ -345,7 +401,19 @@ async fn test_query_rows_with_filter() {
 async fn test_query_rows_with_order() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
-    let result = rows::query_rows(&pool, S, T, &pk_columns, 100, 0, None, Some("\"name\" DESC"), &[]).await.unwrap();
+    let result = rows::query_rows(
+        &pool,
+        S,
+        T,
+        &pk_columns,
+        100,
+        0,
+        None,
+        Some("\"name\" DESC"),
+        &[],
+    )
+    .await
+    .unwrap();
     assert_eq!(result.len(), 3);
     // Charlie (id=3) > Bob (id=2) > Alice (id=1) alphabetically desc
     assert_eq!(result[0].display_name, "3");
@@ -360,7 +428,19 @@ async fn test_query_rows_empty_result() {
     let where_clause = "\"name\"::text = $1";
     let filter_val = "nonexistent_person".to_string();
     let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&filter_val];
-    let result = rows::query_rows(&pool, S, T, &pk_columns, 100, 0, Some(where_clause), None, &params).await.unwrap();
+    let result = rows::query_rows(
+        &pool,
+        S,
+        T,
+        &pk_columns,
+        100,
+        0,
+        Some(where_clause),
+        None,
+        &params,
+    )
+    .await
+    .unwrap();
     assert!(result.is_empty());
 }
 
@@ -369,12 +449,17 @@ async fn test_query_rows_empty_result() {
 #[tokio::test]
 async fn test_get_all_rows_as_text() {
     let pool = get_pool().await;
-    let (col_names, data) = rows::get_all_rows_as_text(&pool, S, T, 100, 0).await.unwrap();
+    let (col_names, data) = rows::get_all_rows_as_text(&pool, S, T, 100, 0)
+        .await
+        .unwrap();
     assert!(col_names.contains(&"id".to_string()));
     assert!(col_names.contains(&"name".to_string()));
     assert_eq!(data.len(), 3);
     // Verify first row has all columns as text
-    let first_row: std::collections::HashMap<&str, Option<&str>> = data[0].iter().map(|(k, v)| (k.as_str(), v.as_deref())).collect();
+    let first_row: std::collections::HashMap<&str, Option<&str>> = data[0]
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_deref()))
+        .collect();
     assert!(first_row.contains_key("name"));
 }
 
@@ -392,14 +477,18 @@ async fn test_get_all_rows_as_text_pagination() {
 #[tokio::test]
 async fn test_list_tables_nonexistent_schema() {
     let pool = get_pool().await;
-    let tables = introspection::list_tables(&pool, "nonexistent_schema_xyz").await.unwrap();
+    let tables = introspection::list_tables(&pool, "nonexistent_schema_xyz")
+        .await
+        .unwrap();
     assert!(tables.is_empty());
 }
 
 #[tokio::test]
 async fn test_list_columns_nonexistent_table() {
     let pool = get_pool().await;
-    let columns = introspection::list_columns(&pool, S, "nonexistent_table_xyz").await.unwrap();
+    let columns = introspection::list_columns(&pool, S, "nonexistent_table_xyz")
+        .await
+        .unwrap();
     assert!(columns.is_empty());
 }
 
@@ -408,7 +497,8 @@ async fn test_get_column_value_nonexistent_column() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
     let pk_values = vec!["1".to_string()];
-    let result = rows::get_column_value(&pool, S, T, "nonexistent_col", &pk_columns, &pk_values).await;
+    let result =
+        rows::get_column_value(&pool, S, T, "nonexistent_col", &pk_columns, &pk_values).await;
     assert!(result.is_err());
 }
 
@@ -416,7 +506,18 @@ async fn test_get_column_value_nonexistent_column() {
 async fn test_query_rows_nonexistent_table() {
     let pool = get_pool().await;
     let pk_columns = vec!["id".to_string()];
-    let result = rows::query_rows(&pool, S, "nonexistent_xyz", &pk_columns, 100, 0, None, None, &[]).await;
+    let result = rows::query_rows(
+        &pool,
+        S,
+        "nonexistent_xyz",
+        &pk_columns,
+        100,
+        0,
+        None,
+        None,
+        &[],
+    )
+    .await;
     assert!(result.is_err());
 }
 
@@ -452,10 +553,15 @@ async fn test_migrations_create_openeral_schema() {
 
     // Clean up from any previous test runs (including refinery's tracking table)
     let client = pool.get().await.unwrap();
-    client.batch_execute("
+    client
+        .batch_execute(
+            "
         DROP SCHEMA IF EXISTS _openeral CASCADE;
         DROP TABLE IF EXISTS public.refinery_schema_history;
-    ").await.unwrap();
+    ",
+        )
+        .await
+        .unwrap();
     drop(client);
 
     // Run migrations
@@ -501,10 +607,15 @@ async fn test_migrations_idempotent() {
 
     // Clean slate
     let client = pool.get().await.unwrap();
-    client.batch_execute("
+    client
+        .batch_execute(
+            "
         DROP SCHEMA IF EXISTS _openeral CASCADE;
         DROP TABLE IF EXISTS public.refinery_schema_history;
-    ").await.unwrap();
+    ",
+        )
+        .await
+        .unwrap();
     drop(client);
 
     // Run migrations twice — second run should be a no-op
@@ -518,10 +629,15 @@ async fn test_log_mount_session() {
 
     // Clean slate, then run migrations fresh
     let client = pool.get().await.unwrap();
-    client.batch_execute("
+    client
+        .batch_execute(
+            "
         DROP SCHEMA IF EXISTS _openeral CASCADE;
         DROP TABLE IF EXISTS public.refinery_schema_history;
-    ").await.unwrap();
+    ",
+        )
+        .await
+        .unwrap();
     drop(client);
 
     migrate::run_migrations(&pool).await.unwrap();

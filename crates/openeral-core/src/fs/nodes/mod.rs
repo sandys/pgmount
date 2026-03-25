@@ -1,23 +1,21 @@
-pub mod root;
-pub mod schema;
-pub mod table;
-pub mod row;
 pub mod column;
-pub mod row_file;
-pub mod info;
 pub mod export;
-pub mod indexes;
 pub mod filter;
+pub mod indexes;
+pub mod info;
 pub mod order;
 pub mod page;
+pub mod root;
+pub mod row;
+pub mod row_file;
+pub mod schema;
+pub mod table;
 
 use crate::config::types::MountConfig;
 use crate::error::FsError;
 use crate::fs::attr;
 use crate::fs::cache::MetadataCache;
-use crate::fs::inode::{
-    FilterStage, InodeTable, NodeIdentity, OrderStage, SpecialDirKind,
-};
+use crate::fs::inode::{FilterStage, InodeTable, NodeIdentity, OrderStage, SpecialDirKind};
 use deadpool_postgres::Pool;
 use fuser::FileAttr;
 
@@ -75,9 +73,7 @@ pub async fn node_lookup(
 ) -> Result<NodeIdentity, FsError> {
     match identity {
         NodeIdentity::Root => root::lookup(name, ctx).await,
-        NodeIdentity::Schema { name: schema_name } => {
-            schema::lookup(schema_name, name, ctx).await
-        }
+        NodeIdentity::Schema { name: schema_name } => schema::lookup(schema_name, name, ctx).await,
         NodeIdentity::Table { schema, table } => table::lookup(schema, table, name, ctx).await,
         NodeIdentity::Row {
             schema,
@@ -109,10 +105,7 @@ pub async fn node_lookup(
             FilterStage::Column { column } => {
                 filter::lookup_column(schema, table, column, name, ctx).await
             }
-            FilterStage::Value {
-                column,
-                value,
-            } => {
+            FilterStage::Value { column, value } => {
                 filter::lookup_value(schema, table, column, value, name, ctx).await
             }
         },
@@ -133,19 +126,21 @@ pub async fn node_lookup(
         },
 
         // Index directory
-        NodeIdentity::IndexDir { schema, table } => {
-            indexes::lookup(schema, table, name, ctx).await
-        }
+        NodeIdentity::IndexDir { schema, table } => indexes::lookup(schema, table, name, ctx).await,
 
         // Page directory (page_N/) contains row dirs
-        NodeIdentity::PageDir { schema, table, page } => {
-            page::lookup(schema, table, *page, name, ctx).await
-        }
+        NodeIdentity::PageDir {
+            schema,
+            table,
+            page,
+        } => page::lookup(schema, table, *page, name, ctx).await,
 
         // Export format directory (data.json/) contains page files
-        NodeIdentity::ExportDir { schema, table, format } => {
-            export::lookup_export_dir(schema, table, format, name, ctx).await
-        }
+        NodeIdentity::ExportDir {
+            schema,
+            table,
+            format,
+        } => export::lookup_export_dir(schema, table, format, name, ctx).await,
 
         _ => Err(FsError::NotFound),
     }
@@ -216,14 +211,18 @@ pub async fn node_readdir(
         }
 
         // Page directory (page_N/) lists rows
-        NodeIdentity::PageDir { schema, table, page } => {
-            page::readdir(schema, table, *page, offset, ctx).await
-        }
+        NodeIdentity::PageDir {
+            schema,
+            table,
+            page,
+        } => page::readdir(schema, table, *page, offset, ctx).await,
 
         // Export format directory (data.json/) lists page files
-        NodeIdentity::ExportDir { schema, table, format } => {
-            export::readdir_export_dir(schema, table, format, offset, ctx).await
-        }
+        NodeIdentity::ExportDir {
+            schema,
+            table,
+            format,
+        } => export::readdir_export_dir(schema, table, format, offset, ctx).await,
 
         _ => Ok(vec![]),
     }

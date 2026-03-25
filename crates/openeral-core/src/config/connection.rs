@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::error::FsError;
 use crate::config::PgmountConfig;
+use crate::error::FsError;
 
 /// Resolve a PostgreSQL connection string from multiple sources, in priority order:
 ///
@@ -11,10 +11,7 @@ use crate::config::PgmountConfig;
 /// 3. The first connection entry in `~/.openeral/config.yml`.
 ///
 /// Returns `FsError::InvalidArgument` if no source yields a connection string.
-pub fn resolve_connection_string(
-    cli_arg: Option<&str>,
-    env_var: &str,
-) -> Result<String, FsError> {
+pub fn resolve_connection_string(cli_arg: Option<&str>, env_var: &str) -> Result<String, FsError> {
     // 1. Explicit CLI argument takes highest priority.
     if let Some(arg) = cli_arg {
         return Ok(arg.to_string());

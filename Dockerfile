@@ -1,3 +1,10 @@
+# Legacy local sandbox image.
+# The supported OpenShell image now lives at `sandboxes/openeral/Dockerfile`
+# and relies on supervisor-managed `/etc/fstab` mounts instead of this
+# entrypoint-driven startup path.
+#
+# Keep this Dockerfile only for local historical/reference use.
+#
 # Base image for the runtime stage
 ARG BASE_IMAGE=ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 

@@ -67,14 +67,23 @@ pub fn discover_fuse_mounts() -> Vec<FuseMount> {
         }
 
         if which_binary(binary).is_none() && find_binary_in_common_paths(binary).is_none() {
-            warn!(binary = binary, mount_point = mount_point, "FUSE binary not found, skipping");
+            warn!(
+                binary = binary,
+                mount_point = mount_point,
+                "FUSE binary not found, skipping"
+            );
             continue;
         }
 
         let source = source.trim_matches('"').trim_matches('\'');
         let read_only = options.split(',').any(|o| o == "ro");
 
-        info!(fs_type = fs_type, source = source, mount_point = mount_point, "Discovered FUSE mount");
+        info!(
+            fs_type = fs_type,
+            source = source,
+            mount_point = mount_point,
+            "Discovered FUSE mount"
+        );
 
         mounts.push(FuseMount {
             source: source.to_string(),
@@ -90,9 +99,8 @@ pub fn discover_fuse_mounts() -> Vec<FuseMount> {
 
 /// Verify /dev/fuse is available.
 ///
-/// The cluster image configures containerd's base_runtime_spec to include
-/// /dev/fuse in all containers. This is set up by the cluster-entrypoint.sh
-/// via cri-base.json — no device plugins or resource requests needed.
+/// In the OpenEral/OpenShell deployment, `/dev/fuse` is injected by kubelet
+/// when sandbox pods request the configured FUSE device-plugin resource.
 pub fn ensure_fuse_device() -> Result<()> {
     let path = Path::new("/dev/fuse");
     if path.exists() {
@@ -100,15 +108,21 @@ pub fn ensure_fuse_device() -> Result<()> {
         Ok(())
     } else {
         Err(miette::miette!(
-            "/dev/fuse not found. The cluster image must be built with FUSE support \
-             (cri-base.json with /dev/fuse in the containerd base_runtime_spec)."
+            "/dev/fuse not found. The cluster must have the FUSE device plugin \
+             deployed and the sandbox pod must request the configured FUSE \
+             device resource."
         ))
     }
 }
 
 /// Find mount.fuse3 in standard locations.
 fn find_mount_fuse3() -> Option<PathBuf> {
-    for path in &["/sbin/mount.fuse3", "/usr/sbin/mount.fuse3", "/bin/mount.fuse3", "/usr/bin/mount.fuse3"] {
+    for path in &[
+        "/sbin/mount.fuse3",
+        "/usr/sbin/mount.fuse3",
+        "/bin/mount.fuse3",
+        "/usr/bin/mount.fuse3",
+    ] {
         let p = PathBuf::from(path);
         if p.exists() {
             return Some(p);
@@ -117,14 +131,52 @@ fn find_mount_fuse3() -> Option<PathBuf> {
     which_binary("mount.fuse3")
 }
 
+fn expand_source_placeholders(source: &str, env: &HashMap<String, String>) -> Result<String> {
+    let mut expanded = String::with_capacity(source.len());
+    let mut rest = source;
+
+    while let Some(start) = rest.find("${") {
+        expanded.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            return Err(miette::miette!(
+                "FUSE mount source `{source}` has an unterminated placeholder"
+            ));
+        };
+
+        let key = &after[..end];
+        if key.is_empty() {
+            return Err(miette::miette!(
+                "FUSE mount source `{source}` has an empty placeholder"
+            ));
+        }
+
+        let value = env.get(key).ok_or_else(|| {
+            miette::miette!(
+                "FUSE mount source `{source}` references missing environment variable `{key}`"
+            )
+        })?;
+        expanded.push_str(value);
+        rest = &after[end + 1..];
+    }
+
+    expanded.push_str(rest);
+    Ok(expanded)
+}
+
 /// Spawn a FUSE daemon via mount.fuse3.
 pub fn spawn_fuse_mount(mount: &FuseMount, env: &HashMap<String, String>) -> Result<Child> {
-    let mount_fuse3 = find_mount_fuse3()
-        .ok_or_else(|| miette::miette!("mount.fuse3 not found"))?;
+    let mount_fuse3 = find_mount_fuse3().ok_or_else(|| miette::miette!("mount.fuse3 not found"))?;
+    let source = expand_source_placeholders(&mount.source, env)?;
 
-    info!(binary = %mount.binary, mount_point = %mount.mount_point.display(), "Spawning FUSE daemon");
+    info!(
+        binary = %mount.binary,
+        source = %source,
+        mount_point = %mount.mount_point.display(),
+        "Spawning FUSE daemon"
+    );
 
-    let type_source = format!("{}#{}", mount.binary, mount.source);
+    let type_source = format!("{}#{}", mount.binary, source);
 
     let mut cmd = Command::new(mount_fuse3);
     cmd.arg(&type_source);
@@ -149,14 +201,21 @@ pub fn wait_for_mount(path: &Path, timeout: Duration) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    Err(miette::miette!("FUSE mount at {} not ready within {:?}", path.display(), timeout))
+    Err(miette::miette!(
+        "FUSE mount at {} not ready within {:?}",
+        path.display(),
+        timeout
+    ))
 }
 
 fn is_mountpoint(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
     std::fs::read_to_string("/proc/mounts")
         .ok()
-        .map(|c| c.lines().any(|l| l.split_whitespace().nth(1) == Some(path_str.as_ref())))
+        .map(|c| {
+            c.lines()
+                .any(|l| l.split_whitespace().nth(1) == Some(path_str.as_ref()))
+        })
         .unwrap_or(false)
 }
 
@@ -171,7 +230,14 @@ fn which_binary(name: &str) -> Option<PathBuf> {
 
 /// Search common binary locations that may not be in PATH.
 fn find_binary_in_common_paths(name: &str) -> Option<PathBuf> {
-    for dir in &["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"] {
+    for dir in &[
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/local/sbin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
         let full = PathBuf::from(dir).join(name);
         if full.is_file() {
             return Some(full);
@@ -190,7 +256,10 @@ pub fn setup_fuse_mounts(
         return Ok(Vec::new());
     }
 
-    info!(count = mounts.len(), "Setting up FUSE mounts from /etc/fstab");
+    info!(
+        count = mounts.len(),
+        "Setting up FUSE mounts from /etc/fstab"
+    );
     ensure_fuse_device()?;
 
     // Build FUSE daemon environment from:
@@ -200,7 +269,13 @@ pub fn setup_fuse_mounts(
 
     // Inherit relevant env vars from the process environment.
     // Provider credentials are injected as pod env vars and available here.
-    for key in &["DATABASE_URL", "OPENERAL_DATABASE_URL", "ANTHROPIC_API_KEY"] {
+    for key in &[
+        "DATABASE_URL",
+        "OPENERAL_DATABASE_URL",
+        "ANTHROPIC_API_KEY",
+        "OPENSHELL_SANDBOX_ID",
+        "OPENSHELL_SANDBOX",
+    ] {
         if !fuse_env.contains_key(*key) {
             if let Ok(val) = std::env::var(key) {
                 fuse_env.insert(key.to_string(), val);
@@ -232,6 +307,10 @@ pub fn setup_fuse_mounts(
     let mut daemons = Vec::new();
 
     for mount in &mounts {
+        expand_source_placeholders(&mount.source, &fuse_env)?;
+    }
+
+    for mount in &mounts {
         if !mount.mount_point.exists() {
             std::fs::create_dir_all(&mount.mount_point).into_diagnostic()?;
         }
@@ -247,7 +326,47 @@ pub fn setup_fuse_mounts(
         }
     }
 
-    policy.filesystem.read_write.push(PathBuf::from("/dev/fuse"));
+    policy
+        .filesystem
+        .read_write
+        .push(PathBuf::from("/dev/fuse"));
     info!(count = daemons.len(), "All FUSE mounts ready");
     Ok(daemons)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_source_placeholders;
+    use std::collections::HashMap;
+
+    #[test]
+    fn expand_source_placeholders_leaves_literal_source_unchanged() {
+        let env = HashMap::new();
+        let source = "env#workspace#literal";
+
+        assert_eq!(
+            expand_source_placeholders(source, &env).unwrap(),
+            "env#workspace#literal"
+        );
+    }
+
+    #[test]
+    fn expand_source_placeholders_substitutes_environment_variables() {
+        let env = HashMap::from([("OPENSHELL_SANDBOX_ID".to_string(), "sandbox-123".to_string())]);
+        let source = "env#workspace#${OPENSHELL_SANDBOX_ID}";
+
+        assert_eq!(
+            expand_source_placeholders(source, &env).unwrap(),
+            "env#workspace#sandbox-123"
+        );
+    }
+
+    #[test]
+    fn expand_source_placeholders_errors_on_missing_variable() {
+        let env = HashMap::new();
+        let source = "env#workspace#${OPENSHELL_SANDBOX_ID}";
+
+        let err = expand_source_placeholders(source, &env).unwrap_err();
+        assert!(err.to_string().contains("OPENSHELL_SANDBOX_ID"));
+    }
 }

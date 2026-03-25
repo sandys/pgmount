@@ -2,18 +2,21 @@
 set -euo pipefail
 
 # =============================================================================
-# openeral-shell-start — Configure and start the persistent shell environment.
-# Designed for OpenShell sandboxes.
+# openeral-shell-start — Legacy entrypoint-based startup helper.
+# Kept for the older local `openeral-shell/` image path only.
+# This is not the supported OpenShell deployment model anymore.
 #
-# Usage:
-#   openshell sandbox create --from . --upload .env
+# Supported OpenShell flow:
+#   use the published `sandboxes/openeral` image plus the custom cluster image,
+#   then let the OpenShell supervisor mount `fuse.openeral` entries from
+#   `/etc/fstab` before the child process starts.
 #
 # Sets up:
 #   /db         — read-only PostgreSQL database browsable as files
 #   /home/agent — read-write persistent home directory (backed by PostgreSQL)
 # =============================================================================
 
-# --- Source .env file if uploaded via --upload .env ---
+# --- Legacy convenience: source /sandbox/.env if present ---
 
 if [ -f /sandbox/.env ]; then
     set -a
@@ -33,8 +36,8 @@ fi
 if [ -z "$DB_URL" ]; then
     echo "ERROR: DATABASE_URL is not set." >&2
     echo "" >&2
-    echo "From repo root:" >&2
-    echo "  openshell sandbox create --from . --upload .env" >&2
+    echo "This legacy script expects DATABASE_URL in the environment or /sandbox/.env." >&2
+    echo "For the supported OpenShell flow, see sandboxes/openeral/README.md." >&2
     exit 1
 fi
 

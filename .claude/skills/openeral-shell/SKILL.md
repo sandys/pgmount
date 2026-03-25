@@ -1,88 +1,130 @@
 ---
 name: openeral-shell
-description: Navigate a PostgreSQL database mounted at /db (fuse.openeral) and manage persistent workspace at /home/agent
+description: Work inside the published openeral OpenShell sandbox with PostgreSQL at /db and a persistent workspace at /home/agent
 ---
 
-# Environment
+# OpenEral in OpenShell
 
-Two FUSE mounts are available:
+This skill assumes you are already inside the published `openeral` OpenShell sandbox image.
 
-- **`/db/`** — PostgreSQL database as a read-only filesystem. Browse with `ls` and `cat`.
-- **`/home/agent/`** — persistent read-write workspace backed by PostgreSQL. Everything you write survives restarts.
+OpenShell is responsible for the mount setup:
 
-Your `~/.claude/` directory (memory, plans, sessions, tasks, todos, skills) persists automatically.
+- the custom cluster image deploys the FUSE device plugin and the gateway requests `github.com/fuse`
+- the sandbox image declares two `fuse.openeral` entries in `/etc/fstab`
+- the side-loaded `openshell-sandbox` supervisor mounts them before the child process starts
+- the provider's `DATABASE_URL` is mapped to `OPENERAL_DATABASE_URL` for the FUSE daemon
 
-## Database Filesystem
+Do not try to bootstrap mounts manually as the normal workflow. Do not rely on `openeral-start.sh`; that path is obsolete.
 
-```
+## Mounted Paths
+
+- **`/db`** — read-only PostgreSQL filesystem
+- **`/home/agent`** — read-write persistent workspace backed by PostgreSQL
+
+Persistence is keyed to `OPENSHELL_SANDBOX_ID`:
+
+- reconnecting to the same sandbox keeps the same `/home/agent`
+- deleting and recreating a sandbox gives you a fresh `/home/agent`
+
+Important: the persistent workspace is `/home/agent`, not necessarily `~`. Some shells and tools still start with `HOME=/sandbox`. If you need state to persist, write it under `/home/agent` explicitly or launch the tool with `HOME=/home/agent`.
+
+## Database Layout
+
+```text
 /db/<schema>/<table>/
   .info/
-    columns.json         column names, types, nullability
-    schema.sql           CREATE TABLE DDL
-    count                exact row count
-    primary_key          primary key column(s)
+    columns.json
+    schema.sql
+    count
+    primary_key
   .export/
-    data.json/           paginated JSON  (page_1.json, page_2.json, ...)
-    data.csv/            paginated CSV
-    data.yaml/           paginated YAML
-  .filter/<col>/<val>/   rows where column = value (paginated)
-  .order/<col>/asc/      rows sorted ascending (paginated)
-  .order/<col>/desc/     rows sorted descending (paginated)
-  .indexes/<name>        index definitions
-  page_1/
-    <pk_value>/          row directory (named by primary key)
-      <column>           column value as plain text
-      row.json           full row as JSON
-      row.csv            full row as CSV
-      row.yaml           full row as YAML
+    data.json/page_1.json
+    data.csv/page_1.csv
+    data.yaml/page_1.yaml
+  .filter/<column>/<value>/<pk>/
+    <column>
+    row.json
+    row.csv
+    row.yaml
+  .order/<column>/asc/<pk>/
+  .order/<column>/desc/<pk>/
+  .indexes/<index_name>
+  page_1/<pk>/
+    <column>
+    row.json
+    row.csv
+    row.yaml
   page_2/
   ...
 ```
 
-## Workflows
+Current implementation detail:
 
-**Understand a table:**
+- `page_N/` is paginated table browsing
+- `.filter/<column>/<value>/` returns matching row directories directly
+- `.order/<column>/asc|desc/` returns row directories directly
+- `.filter` and `.order` currently expose only the first page-size batch of results, not a separate `page_1/` tree
+
+## Recommended Workflow
+
+**Confirm the environment first:**
 
 ```bash
-cat /db/public/users/.info/columns.json    # what columns exist
-cat /db/public/users/.info/count           # how many rows
-cat /db/public/users/.info/schema.sql      # full DDL
-cat /db/public/users/page_1/1/row.json     # sample row
+[ -d /db ] && echo db-ok
+[ -d /home/agent ] && echo workspace-ok
+grep -E ' /db | /home/agent ' /proc/mounts
 ```
 
-**Find specific rows:**
+**Understand a table before scanning it:**
 
 ```bash
-# Filter by column value — runs a targeted SQL query, fast
-ls /db/public/users/.filter/email/alice@example.com/
+ls /db
+ls /db/public
+cat /db/public/users/.info/columns.json
+cat /db/public/users/.info/count
+cat /db/public/users/.info/schema.sql
+```
+
+**Read rows efficiently:**
+
+```bash
+# First page browse
+cat /db/public/users/page_1/1/row.json
+cat /db/public/users/page_1/1/email
+
+# Targeted lookup: prefer this over scanning pages
 cat /db/public/users/.filter/id/42/42/row.json
+ls /db/public/users/.filter/email/alice@example.com/
 
-# Sort by column
-ls /db/public/orders/.order/created_at/desc/page_1/
+# Sorted sample: current layout is direct row directories, not page_1/
+ls /db/public/orders/.order/created_at/desc/
 ```
 
-**Export data:**
+**Export larger datasets:**
 
 ```bash
-cat /db/public/users/.export/data.csv/page_1.csv
 cat /db/public/users/.export/data.json/page_1.json
+cat /db/public/users/.export/data.csv/page_1.csv
 cat /db/public/users/.export/data.yaml/page_1.yaml
 ```
 
-**Save work:**
+**Keep all persistent state under `/home/agent`:**
 
 ```bash
-# Everything under /home/agent/ persists
-echo "findings" > ~/notes.md
-mkdir -p ~/projects/analysis
+mkdir -p /home/agent/projects/analysis
+printf 'findings\n' > /home/agent/projects/analysis/notes.md
+
+# For tools that store state under $HOME
+HOME=/home/agent <tool>
 ```
 
-## Rules
+## Operational Rules
 
-1. **`/db/` is read-only.** Writes return "Read-only file system".
-2. **Check `.info/count` before scanning.** Large tables have thousands of pages — don't `ls` them all.
-3. **Use `.filter/` for lookups.** It runs a targeted SQL query. Much faster than scanning pages.
-4. **Pages hold up to 1000 rows.**
-5. **Composite primary keys** appear as `col1=val1,col2=val2` directory names.
+1. **`/db` is read-only.** Any write attempt should be treated as a mistake.
+2. **Check `.info/count` before broad scans.** Large tables can have many pages.
+3. **Prefer `.filter/` for lookups.** It is the targeted path.
+4. **Use `.order/` for ordered samples, not full-table exports.**
+5. **Composite primary keys** appear as `col1=val1,col2=val2`.
 6. **NULL values** appear as empty files.
-7. **`/home/agent/` is persistent.** Write freely — files are stored in PostgreSQL.
+7. **Persistent work belongs in `/home/agent`.** `/sandbox` is not the durable workspace.
+8. **If `/db` or `/home/agent` is missing, treat it as an infrastructure issue.** Check `/proc/mounts`, then report the mount failure instead of trying ad hoc `mknod`, `mount`, or cgroup workarounds from inside the sandbox.

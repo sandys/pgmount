@@ -1,7 +1,7 @@
+use crate::db::queries::{introspection, stats};
 use crate::error::FsError;
 use crate::fs::inode::NodeIdentity;
 use crate::fs::nodes::{DirEntry, NodeContext};
-use crate::db::queries::{introspection, stats};
 
 const INFO_FILES: &[&str] = &["columns.json", "schema.sql", "count", "primary_key"];
 
@@ -28,15 +28,18 @@ pub async fn readdir(
     _offset: i64,
     _ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
-    Ok(INFO_FILES.iter().map(|f| DirEntry {
-        name: f.to_string(),
-        identity: NodeIdentity::InfoFile {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            filename: f.to_string(),
-        },
-        kind: fuser::FileType::RegularFile,
-    }).collect())
+    Ok(INFO_FILES
+        .iter()
+        .map(|f| DirEntry {
+            name: f.to_string(),
+            identity: NodeIdentity::InfoFile {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                filename: f.to_string(),
+            },
+            kind: fuser::FileType::RegularFile,
+        })
+        .collect())
 }
 
 pub async fn read(
@@ -50,15 +53,18 @@ pub async fn read(
     let content = match filename {
         "columns.json" => {
             let columns = introspection::list_columns(ctx.pool, schema, table).await?;
-            let json_cols: Vec<serde_json::Value> = columns.iter().map(|c| {
-                serde_json::json!({
-                    "name": c.name,
-                    "data_type": c.data_type,
-                    "is_nullable": c.is_nullable,
-                    "column_default": c.column_default,
-                    "ordinal_position": c.ordinal_position,
+            let json_cols: Vec<serde_json::Value> = columns
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "data_type": c.data_type,
+                        "is_nullable": c.is_nullable,
+                        "column_default": c.column_default,
+                        "ordinal_position": c.ordinal_position,
+                    })
                 })
-            }).collect();
+                .collect();
             serde_json::to_string_pretty(&json_cols)
                 .map_err(|e| FsError::SerializationError(e.to_string()))?
                 + "\n"
@@ -66,13 +72,17 @@ pub async fn read(
         "schema.sql" => {
             let columns = introspection::list_columns(ctx.pool, schema, table).await?;
             let pk = introspection::get_primary_key(ctx.pool, schema, table).await?;
-            let mut ddl = format!("CREATE TABLE {}.{} (\n",
+            let mut ddl = format!(
+                "CREATE TABLE {}.{} (\n",
                 crate::db::queries::quote_ident(schema),
-                crate::db::queries::quote_ident(table));
+                crate::db::queries::quote_ident(table)
+            );
             for (i, col) in columns.iter().enumerate() {
-                ddl.push_str(&format!("    {} {}",
+                ddl.push_str(&format!(
+                    "    {} {}",
                     crate::db::queries::quote_ident(&col.name),
-                    col.data_type));
+                    col.data_type
+                ));
                 if !col.is_nullable {
                     ddl.push_str(" NOT NULL");
                 }
@@ -85,7 +95,9 @@ pub async fn read(
                 ddl.push('\n');
             }
             if !pk.column_names.is_empty() {
-                let pk_cols: Vec<String> = pk.column_names.iter()
+                let pk_cols: Vec<String> = pk
+                    .column_names
+                    .iter()
                     .map(|c| crate::db::queries::quote_ident(c))
                     .collect();
                 ddl.push_str(&format!("    PRIMARY KEY ({})\n", pk_cols.join(", ")));

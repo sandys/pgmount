@@ -1,10 +1,10 @@
-use clap::Args;
 use crate::config::connection::resolve_connection_string;
 use crate::config::types::MountConfig;
 use crate::db::migrate;
 use crate::db::pool::create_pool;
 use crate::error::FsError;
 use crate::fs::PgmountFilesystem;
+use clap::Args;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -63,8 +63,14 @@ pub async fn execute(args: MountArgs) -> Result<(), FsError> {
     let pool = create_pool(&conn_str, config.statement_timeout_secs)?;
 
     // Test the connection
-    let client = pool.get().await.map_err(|e| FsError::DatabaseError(format!("Connection failed: {}", e)))?;
-    client.execute("SELECT 1", &[]).await.map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection failed: {}", e)))?;
+    client
+        .execute("SELECT 1", &[])
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
     drop(client);
     info!("Connection verified");
 
@@ -99,10 +105,11 @@ pub async fn execute(args: MountArgs) -> Result<(), FsError> {
 
     // fuser::mount2 blocks, so run in a blocking thread
     let handle = tokio::task::spawn_blocking(move || {
-        fuser::mount2(fs, &mount_point, &fuse_config)
-            .map_err(FsError::IoError)
+        fuser::mount2(fs, &mount_point, &fuse_config).map_err(FsError::IoError)
     });
 
-    handle.await.map_err(|e| FsError::InternalError(format!("Mount task failed: {}", e)))??;
+    handle
+        .await
+        .map_err(|e| FsError::InternalError(format!("Mount task failed: {}", e)))??;
     Ok(())
 }

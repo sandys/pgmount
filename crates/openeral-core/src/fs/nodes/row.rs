@@ -81,7 +81,11 @@ pub async fn readdir(
     Ok(entries)
 }
 
-async fn get_columns(schema: &str, table: &str, ctx: &NodeContext<'_>) -> Result<Vec<ColumnInfo>, FsError> {
+async fn get_columns(
+    schema: &str,
+    table: &str,
+    ctx: &NodeContext<'_>,
+) -> Result<Vec<ColumnInfo>, FsError> {
     if let Some(cached) = ctx.cache.get_columns(schema, table) {
         return Ok(cached);
     }

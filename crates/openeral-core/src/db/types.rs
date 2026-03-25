@@ -35,7 +35,7 @@ pub struct IndexInfo {
 #[derive(Debug, Clone)]
 pub struct RowIdentifier {
     pub pk_values: Vec<(String, String)>, // (column_name, value_as_string)
-    pub display_name: String,  // For directory name: "pk_value" or "pk1=v1,pk2=v2"
+    pub display_name: String,             // For directory name: "pk_value" or "pk1=v1,pk2=v2"
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

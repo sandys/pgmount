@@ -6,4 +6,7 @@
 target
 agent-task.txt
 sandboxes
+!sandboxes/
+!sandboxes/openeral/
+!sandboxes/openeral/**
 vendor

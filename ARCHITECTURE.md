@@ -67,7 +67,7 @@ openeral/
     openeral/                        # OpenShell sandbox for AI agents
       Dockerfile                    # Multi-stage: build openeral + extend openclaw base
       policy.yaml                   # Landlock filesystem + capability policy
-      openeral-start.sh             # Entrypoint: starts openeral, polls mount, execs agent
+      README.md                     # Published-image OpenShell flow and sandbox behavior
       skills/openeral-navigate/     # Agent skill for /db navigation
   tests/
     test_fuse_mount.sh              # FUSE mount integration test suite

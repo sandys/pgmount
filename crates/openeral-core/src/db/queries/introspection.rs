@@ -105,10 +105,7 @@ pub async fn get_primary_key(
         )
         .await?;
 
-    let column_names = rows
-        .iter()
-        .map(|row| row.get("column_name"))
-        .collect();
+    let column_names = rows.iter().map(|row| row.get("column_name")).collect();
 
     Ok(PrimaryKeyInfo { column_names })
 }

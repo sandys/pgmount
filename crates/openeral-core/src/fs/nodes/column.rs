@@ -29,9 +29,15 @@ pub async fn read(
 ) -> Result<Vec<u8>, FsError> {
     let pk_info = introspection::get_primary_key(ctx.pool, schema, table).await?;
     let pk_values = parse_pk_display(pk_display, &pk_info.column_names);
-    let value =
-        rows::get_column_value(ctx.pool, schema, table, column, &pk_info.column_names, &pk_values)
-            .await?;
+    let value = rows::get_column_value(
+        ctx.pool,
+        schema,
+        table,
+        column,
+        &pk_info.column_names,
+        &pk_values,
+    )
+    .await?;
     let content = match value {
         Some(v) => format!("{}\n", v),
         None => "NULL\n".to_string(),
@@ -61,7 +67,11 @@ pub fn parse_pk_display(display: &str, pk_columns: &[String]) -> Vec<String> {
                 if i + 1 < pk_columns.len() {
                     let next_prefix = format!(",{}=", pk_columns[i + 1]);
                     if let Some(pos) = rest.find(&next_prefix) {
-                        values.push(percent_decode_str(&rest[..pos]).decode_utf8_lossy().to_string());
+                        values.push(
+                            percent_decode_str(&rest[..pos])
+                                .decode_utf8_lossy()
+                                .to_string(),
+                        );
                         remaining = &rest[pos + 1..];
                     } else {
                         values.push(percent_decode_str(rest).decode_utf8_lossy().to_string());
@@ -71,7 +81,11 @@ pub fn parse_pk_display(display: &str, pk_columns: &[String]) -> Vec<String> {
                     values.push(percent_decode_str(rest).decode_utf8_lossy().to_string());
                 }
             } else {
-                values.push(percent_decode_str(remaining).decode_utf8_lossy().to_string());
+                values.push(
+                    percent_decode_str(remaining)
+                        .decode_utf8_lossy()
+                        .to_string(),
+                );
             }
         }
         values

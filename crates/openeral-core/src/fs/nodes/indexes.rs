@@ -1,7 +1,7 @@
+use crate::db::queries::indexes as idx_queries;
 use crate::error::FsError;
 use crate::fs::inode::NodeIdentity;
 use crate::fs::nodes::{DirEntry, NodeContext};
-use crate::db::queries::indexes as idx_queries;
 
 pub async fn lookup(
     schema: &str,
@@ -28,15 +28,18 @@ pub async fn readdir(
     ctx: &NodeContext<'_>,
 ) -> Result<Vec<DirEntry>, FsError> {
     let indexes = idx_queries::list_indexes(ctx.pool, schema, table).await?;
-    Ok(indexes.iter().map(|idx| DirEntry {
-        name: idx.name.clone(),
-        identity: NodeIdentity::IndexFile {
-            schema: schema.to_string(),
-            table: table.to_string(),
-            index_name: idx.name.clone(),
-        },
-        kind: fuser::FileType::RegularFile,
-    }).collect())
+    Ok(indexes
+        .iter()
+        .map(|idx| DirEntry {
+            name: idx.name.clone(),
+            identity: NodeIdentity::IndexFile {
+                schema: schema.to_string(),
+                table: table.to_string(),
+                index_name: idx.name.clone(),
+            },
+            kind: fuser::FileType::RegularFile,
+        })
+        .collect())
 }
 
 pub async fn read(
@@ -48,7 +51,9 @@ pub async fn read(
     ctx: &NodeContext<'_>,
 ) -> Result<Vec<u8>, FsError> {
     let indexes = idx_queries::list_indexes(ctx.pool, schema, table).await?;
-    let idx = indexes.iter().find(|i| i.name == index_name)
+    let idx = indexes
+        .iter()
+        .find(|i| i.name == index_name)
         .ok_or(FsError::NotFound)?;
 
     let content = format!(

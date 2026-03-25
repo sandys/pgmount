@@ -1,128 +1,89 @@
 # OpenEral Sandbox
 
-A container image for running AI agents with PostgreSQL database access at `/db` (read-only) and an optional persistent workspace at `/home/agent` (read-write, backed by PostgreSQL).
+Prebuilt OpenShell sandbox image for mounting PostgreSQL at `/db` and a persistent workspace at `/home/agent`.
 
 ## Quick Start
 
 ```bash
-# Create .env with OPENERAL_DATABASE_URL (and optionally OPENERAL_WORKSPACE_ID, etc.)
+# 1. Install the stock OpenShell CLI
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
 
-# Database access only
-openshell sandbox create --from sandboxes/openeral \
-  --upload .env:/sandbox/.env \
-  -- openeral-start.sh openclaw-start
+# 2. Compose stock openshell commands with shell variables.
+# No wrapper scripts are required.
+export OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest
+export OPENERAL_SANDBOX_IMAGE=ghcr.io/<owner>/openeral-sandbox:latest
+export OPENERAL_PROVIDER_NAME=db
+export OPENERAL_SANDBOX_NAME=openeral-demo
+export OPENERAL_DATABASE_URL='host=pg.example.com user=myuser dbname=mydb'
 
-# Database access + persistent workspace
-# .env should contain:
-#   OPENERAL_DATABASE_URL=postgres://user:pass@db.example.com/myapp
-#   OPENERAL_WORKSPACE_ID=agent-42
-#   OPENERAL_WORKSPACE_CONFIG={"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}
-openshell sandbox create --from sandboxes/openeral \
-  --upload .env:/sandbox/.env \
-  -- openeral-start.sh openclaw-start
+# 3. Start the gateway with the custom cluster image
+openshell gateway start
+
+# 4. Create a provider with PostgreSQL credentials
+openshell provider create \
+  --name "$OPENERAL_PROVIDER_NAME" \
+  --type generic \
+  --credential "DATABASE_URL=$OPENERAL_DATABASE_URL"
+
+# 5. Create a sandbox from the published openeral image
+openshell sandbox create \
+  --name "$OPENERAL_SANDBOX_NAME" \
+  --from "$OPENERAL_SANDBOX_IMAGE" \
+  --provider "$OPENERAL_PROVIDER_NAME"
+
+# 6. Connect
+openshell sandbox connect "$OPENERAL_SANDBOX_NAME"
+
+# 7. Start Claude with persistent HOME
+HOME=/home/agent claude
 ```
 
-## Environment Variables
+## How It Works
 
-### Database mount (`/db`)
+- The custom cluster image deploys the FUSE device plugin and configures the gateway to request `github.com/fuse` for sandbox pods.
+- The sandbox image declares two supervisor-managed FUSE mounts in `/etc/fstab`:
+  - `env /db fuse.openeral ro,allow_other,noauto 0 0`
+  - `env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0`
+- OpenShell side-loads `openshell-sandbox`, which reads `/etc/fstab`, resolves the mount sources, and launches `mount.fuse3` before the child process starts.
+- `DATABASE_URL` from the provider is mapped to `OPENERAL_DATABASE_URL` for the FUSE daemon automatically.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENERAL_DATABASE_URL` | *(required)* | PostgreSQL connection string |
-| `OPENERAL_SCHEMAS` | all | Comma-separated schema filter (e.g. `public,analytics`) |
-| `OPENERAL_PAGE_SIZE` | 1000 | Rows per page directory |
-| `OPENERAL_CACHE_TTL` | 30 | Metadata cache TTL in seconds |
-| `OPENERAL_STATEMENT_TIMEOUT` | 30 | SQL query timeout in seconds |
-| `OPENERAL_TIMEOUT` | 15 | Seconds to wait for mount readiness at startup |
+## Persistence Model
 
-### Workspace mount (`/home/agent`)
+- `/db` is a read-only PostgreSQL mount.
+- `/home/agent` is a read-write openeral workspace keyed to `OPENSHELL_SANDBOX_ID`.
+- Reconnecting to the same sandbox preserves `/home/agent`.
+- Deleting and recreating a sandbox creates a new workspace because the sandbox id changes.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENERAL_WORKSPACE_ID` | *(optional)* | Workspace ID — enables workspace mount |
-| `OPENERAL_WORKSPACE_MOUNT` | `/home/agent` | Mount point for the workspace |
-| `OPENERAL_WORKSPACE_NAME` | *(workspace ID)* | Display name |
-| `OPENERAL_WORKSPACE_CONFIG` | `{}` | JSON config for auto_dirs/seed_files |
+## Database Permissions
 
-When `OPENERAL_WORKSPACE_ID` is set, the entrypoint:
-1. Creates the workspace if it doesn't exist
-2. Mounts it at `OPENERAL_WORKSPACE_MOUNT`
-3. Sets `HOME` to the mount point
-4. Launches the agent command
+The database role used by the provider needs:
 
-## Claude Code Setup
+- `USAGE` on the application schemas it should browse
+- `SELECT` on the application tables it should read
+- write access to the `_openeral` schema for migrations and workspace storage
 
-To run Claude Code with persistent state in the sandbox:
-
-```bash
-# .env should contain:
-#   OPENERAL_DATABASE_URL=postgres://user:pass@db/myapp
-#   OPENERAL_WORKSPACE_ID=claude-agent-1
-#   OPENERAL_WORKSPACE_CONFIG={"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions",".claude/tasks",".claude/todos"]}
-#   ANTHROPIC_API_KEY=sk-ant-...
-openshell sandbox create --from sandboxes/openeral \
-  --upload .env:/sandbox/.env \
-  -- openeral-start.sh claude
-```
-
-Claude Code's `~/.claude/` directory (memory, plans, tasks, sessions, settings) persists across container restarts because `HOME=/home/agent` points to the openeral workspace.
-
-To verify persistence:
-
-```bash
-# After the agent runs, check PostgreSQL directly
-psql -c "SELECT path, size FROM _openeral.workspace_files WHERE workspace_id='claude-agent-1' ORDER BY path;"
-```
-
-## Credential Handling
-
-| Tier | Approach | Security |
-|------|----------|----------|
-| Simple | `--upload .env:/sandbox/.env` on sandbox create | File-based, not in process list |
-| Recommended | Docker secret at `/run/secrets/openeral_database_url` | Not in env or process list |
-| Production | Read-only PG role + PgBouncer + secrets injection | Minimal privilege |
-
-The entrypoint checks `/run/secrets/openeral_database_url` first, then falls back to the environment variable.
-
-### Production Database Role
+Example:
 
 ```sql
-CREATE ROLE agent_readonly LOGIN PASSWORD 'secure-password';
 GRANT CONNECT ON DATABASE myapp TO agent_readonly;
 GRANT USAGE ON SCHEMA public TO agent_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO agent_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO agent_readonly;
 
--- openeral needs write access to its internal schema
 GRANT ALL ON SCHEMA _openeral TO agent_readonly;
 GRANT ALL ON ALL TABLES IN SCHEMA _openeral TO agent_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA _openeral GRANT ALL ON TABLES TO agent_readonly;
 ```
 
-## Security Model
+## Developer Notes
 
-- **`/db`** — read-only FUSE mount (`MountOption::RO`). No data mutation possible.
-- **`/home/agent`** — read-write workspace. Stores only agent state, cannot access database tables.
-- **Landlock policy** — filesystem access restricted via `policy.yaml`.
-- **FUSE** — requires `SYS_ADMIN` capability and `/dev/fuse` device access.
+Build the sandbox image from the repo root:
 
-## Docker Requirements
-
-```yaml
-devices:
-  - /dev/fuse
-cap_add:
-  - SYS_ADMIN
-security_opt:
-  - apparmor:unconfined
+```bash
+docker build -f sandboxes/openeral/Dockerfile -t openeral-sandbox:dev .
 ```
 
-## Troubleshooting
+Important constraints:
 
-**"fusermount: mount failed"** — Ensure `SYS_ADMIN` capability and `/dev/fuse` device. Check `user_allow_other` in `/etc/fuse.conf`.
-
-**Connection timeout** — Verify `OPENERAL_DATABASE_URL` and network access. Increase `OPENERAL_TIMEOUT` for slow databases.
-
-**Empty `/db/`** — Check `OPENERAL_SCHEMAS` filter. Verify database user has `USAGE` on target schemas and `SELECT` on tables.
-
-**"Migration failed"** — Database user needs `CREATE` privilege for the `_openeral` schema. See Production Database Role above.
+- `openshell sandbox create --from sandboxes/openeral` is not the supported user flow. The image is designed to be published first, then referenced by image tag.
+- The image `ENTRYPOINT` is not used under OpenShell. The supervisor overrides the container command and mounts FUSE from `/etc/fstab`.

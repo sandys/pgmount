@@ -155,12 +155,14 @@ async fn execute_mount(args: MountWorkspaceArgs) -> Result<(), FsError> {
     let pool = create_pool(&conn_str, args.statement_timeout)?;
 
     // Test connection
-    let client = pool.get().await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection failed: {}", e))
-    })?;
-    client.execute("SELECT 1", &[]).await.map_err(|e| {
-        FsError::DatabaseError(format!("Connection test failed: {}", e))
-    })?;
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection failed: {}", e)))?;
+    client
+        .execute("SELECT 1", &[])
+        .await
+        .map_err(|e| FsError::DatabaseError(format!("Connection test failed: {}", e)))?;
     drop(client);
 
     if !args.skip_migrations {
@@ -220,7 +222,10 @@ async fn execute_seed(args: SeedArgs) -> Result<(), FsError> {
     ws_queries::seed_from_config(&pool, &args.id, &ws.config).await?;
 
     let count = ws_queries::seed_from_directory(&pool, &args.id, &args.from).await?;
-    println!("Seeded {} files/directories into workspace '{}'", count, args.id);
+    println!(
+        "Seeded {} files/directories into workspace '{}'",
+        count, args.id
+    );
     Ok(())
 }
 

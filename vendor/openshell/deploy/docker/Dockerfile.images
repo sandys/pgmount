@@ -247,9 +247,6 @@ COPY --from=nvidia-toolkit /etc/nvidia-container-runtime /etc/nvidia-container-r
 COPY --from=nvidia-toolkit /usr/lib/*-linux-gnu/libnvidia-container*.so* /usr/lib/
 COPY --from=supervisor-builder /build/out/openshell-sandbox /opt/openshell/bin/openshell-sandbox
 
-# OCI base runtime spec with /dev/fuse for FUSE-enabled sandbox images
-COPY deploy/docker/cri-base.json /opt/openshell/cri-base.json
-
 RUN mkdir -p /var/lib/rancher/k3s/server/manifests \
              /var/lib/rancher/k3s/server/static/charts \
              /etc/rancher/k3s \

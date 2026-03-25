@@ -33,15 +33,28 @@ openeral also provides **writable workspaces** — a read-write FUSE filesystem 
 
 ## Installation
 
-### Quick start with openeral-shell (no Rust needed)
+### Quick start in OpenShell (supported)
 
 ```bash
-cd openeral-shell
-docker compose up -d
-docker compose exec openeral-shell bash    # persistent shell with /db and $HOME
+# Start a gateway that uses the custom OpenShell cluster image
+OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest \
+  openshell gateway start
+
+# Create a provider with PostgreSQL credentials
+openshell provider create --name db --type generic \
+  --credential 'DATABASE_URL=host=pg.example.com user=myuser dbname=mydb'
+
+# Create a sandbox from the published openeral image
+openshell sandbox create \
+  --from ghcr.io/<owner>/openeral-sandbox:latest \
+  --provider db
+
+# Connect, then launch Claude with persistent HOME
+openshell sandbox connect <sandbox-name>
+HOME=/home/agent claude
 ```
 
-Everything is pre-built inside Docker. See [openeral-shell/README.md](openeral-shell/README.md) for details.
+See [sandboxes/openeral/README.md](sandboxes/openeral/README.md) for the supported sandbox flow.
 
 ### Build from source
 
@@ -195,22 +208,43 @@ openeral workspace mount my-agent /home/agent
 HOME=/home/agent claude -p "Create a plan for my project" --model claude-sonnet-4-6
 ```
 
-### In a sandbox container
+### In OpenShell
 
 ```bash
-openshell sandbox create --from openeral \
-  -e OPENERAL_DATABASE_URL="postgres://user:pass@db/myapp" \
-  -e OPENERAL_WORKSPACE_ID="agent-42" \
-  -e OPENERAL_WORKSPACE_CONFIG='{"auto_dirs":[".claude",".claude/memory",".claude/plans",".claude/sessions"]}' \
-  -e ANTHROPIC_API_KEY="sk-ant-..." \
-  -- openeral-start.sh claude
+# No wrapper scripts are required. Use stock openshell commands.
+export OPENSHELL_CLUSTER_IMAGE=ghcr.io/<owner>/openeral-cluster:latest
+export OPENERAL_SANDBOX_IMAGE=ghcr.io/<owner>/openeral-sandbox:latest
+export OPENERAL_PROVIDER_NAME=db
+export OPENERAL_SANDBOX_NAME=openeral-demo
+export OPENERAL_DATABASE_URL='host=pg.example.com user=myuser dbname=mydb'
+
+# Start the gateway with the custom cluster image
+openshell gateway start
+
+# Create a provider with PostgreSQL credentials
+openshell provider create \
+  --name "$OPENERAL_PROVIDER_NAME" \
+  --type generic \
+  --credential "DATABASE_URL=$OPENERAL_DATABASE_URL"
+
+# Create a sandbox from the published openeral image
+openshell sandbox create \
+  --name "$OPENERAL_SANDBOX_NAME" \
+  --from "$OPENERAL_SANDBOX_IMAGE" \
+  --provider "$OPENERAL_PROVIDER_NAME"
+
+# Connect, then run tools with HOME on the persistent workspace
+openshell sandbox connect "$OPENERAL_SANDBOX_NAME"
+HOME=/home/agent claude
 ```
 
-The entrypoint automatically creates the workspace (if new), mounts it at `/home/agent`, and sets `HOME=/home/agent` before launching the agent.
+The custom cluster image deploys the FUSE device plugin and configures the gateway to request `github.com/fuse` for sandbox pods. The sandbox image declares `/db` and `/home/agent` in `/etc/fstab`, and the side-loaded OpenShell supervisor mounts both before launching the child process.
+
+`/db` is read-only. `/home/agent` is read-write and keyed to `OPENSHELL_SANDBOX_ID`, so each sandbox object gets its own persistent workspace. Reconnecting to the same sandbox preserves state; deleting and recreating a sandbox creates a fresh workspace.
 
 ### What persists
 
-Everything Claude Code writes under `~/.claude/`:
+When Claude Code is launched with `HOME=/home/agent`, everything it writes under `~/.claude/` persists:
 
 | Path | Content |
 |------|---------|
@@ -228,26 +262,10 @@ All stored as rows in `_openeral.workspace_files` — one row per file, content 
 A pre-built container image for running AI agents with database access. See [sandboxes/openeral/README.md](sandboxes/openeral/README.md) for full documentation.
 
 ```bash
-openshell sandbox build openeral
-openshell sandbox create --from openeral \
-  -e OPENERAL_DATABASE_URL="postgres://readonly:pass@db.example.com/myapp" \
-  -- openeral-start.sh openclaw-start
+docker build -f sandboxes/openeral/Dockerfile -t openeral-sandbox:dev .
 ```
 
-The sandbox mounts the database read-only at `/db` and optionally mounts a writable workspace at `/home/agent`. A Landlock security policy restricts filesystem access.
-
-### Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENERAL_DATABASE_URL` | *(required)* | PostgreSQL connection string |
-| `OPENERAL_SCHEMAS` | all | Comma-separated schema filter |
-| `OPENERAL_PAGE_SIZE` | 1000 | Rows per page directory |
-| `OPENERAL_CACHE_TTL` | 30 | Metadata cache TTL in seconds |
-| `OPENERAL_STATEMENT_TIMEOUT` | 30 | SQL query timeout in seconds |
-| `OPENERAL_WORKSPACE_ID` | *(optional)* | Enables workspace mount |
-| `OPENERAL_WORKSPACE_MOUNT` | `/home/agent` | Workspace mount point |
-| `OPENERAL_WORKSPACE_CONFIG` | `{}` | JSON config for auto_dirs/seed_files |
+For end users, the supported path is the published sandbox image plus the custom cluster image shown above. The sandbox image is built from the repo root because it copies `Cargo.toml`, `Cargo.lock`, `crates/`, and `.claude/skills/` into the build context.
 
 ## Migrations
 

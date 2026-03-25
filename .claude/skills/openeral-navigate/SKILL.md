@@ -3,12 +3,18 @@ name: openeral-navigate
 description: Navigate a PostgreSQL database mounted at /db and manage persistent workspace state
 ---
 
-# OpenEral — Database at /db, Workspace at $HOME
+# OpenEral — Database at /db, Workspace at /home/agent
 
 You have two mounted filesystems:
 
 - **`/db`** — read-only PostgreSQL database. Browse schemas, tables, rows as directories and files.
-- **`$HOME`** (typically `/home/agent`) — read-write workspace backed by PostgreSQL. Your `~/.claude/` directory persists across restarts.
+- **`/home/agent`** — read-write workspace backed by PostgreSQL.
+
+Important:
+
+- `/home/agent` is the durable workspace
+- some sessions still start with `HOME=/sandbox`
+- if you want tool state to persist, write under `/home/agent` directly or run the tool with `HOME=/home/agent`
 
 ## Database: Quick Reference
 
@@ -29,7 +35,7 @@ cat /db/public/users/.filter/id/42/42/row.json
 ls /db/public/users/.filter/active/true/
 
 # Sort
-ls /db/public/users/.order/created_at/desc/page_1/
+ls /db/public/users/.order/created_at/desc/
 
 # Export
 cat /db/public/users/.export/data.csv/page_1.csv
@@ -46,8 +52,8 @@ cat /db/public/users/.export/data.json/page_1.json
   .info/primary_key      — PK column(s)
   .export/data.json/     — paginated JSON export (page_1.json, page_2.json, ...)
   .export/data.csv/      — paginated CSV export
-  .filter/<col>/<val>/   — rows matching column=value
-  .order/<col>/asc|desc/ — sorted rows
+  .filter/<col>/<val>/   — matching row directories
+  .order/<col>/asc|desc/ — sorted row directories
   .indexes/<name>        — index definitions
   page_1/                — first 1000 rows
     <pk>/                — row directory (named by primary key value)
@@ -60,17 +66,15 @@ cat /db/public/users/.export/data.json/page_1.json
 
 ## Workspace: Persistent State
 
-Your `~/.claude/` directory is backed by PostgreSQL. Everything you write persists across container restarts.
+Everything written under `/home/agent` persists across reconnects to the same sandbox.
 
 ```bash
-# All of these persist automatically
-ls ~/.claude/                      # memory, plans, sessions, tasks, todos
-cat ~/.claude/settings.json        # your settings
-echo "note" > ~/.claude/memory/context.md
+# Use the persistent workspace directly
+mkdir -p /home/agent/projects/myapp
+echo "hello" > /home/agent/projects/myapp/notes.txt
 
-# Create any files/directories — they all persist
-mkdir -p ~/projects/myapp
-echo "hello" > ~/projects/myapp/notes.txt
+# For tools that store state under $HOME
+HOME=/home/agent <tool>
 ```
 
 ## Rules
@@ -81,4 +85,4 @@ echo "hello" > ~/projects/myapp/notes.txt
 4. **Pages contain up to 1000 rows** (configurable via `OPENERAL_PAGE_SIZE`).
 5. **Composite primary keys** use the format `col1=val1,col2=val2` as directory names.
 6. **NULL values** appear as empty files.
-7. **`$HOME` is read-write.** Files persist in PostgreSQL — treat it like a normal home directory.
+7. **Persistent state belongs in `/home/agent`.** Do not assume `/sandbox` or the current `$HOME` is durable.

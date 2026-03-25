@@ -2,8 +2,7 @@ use crate::error::FsError;
 
 pub async fn execute() -> Result<(), FsError> {
     // Read /proc/mounts or /etc/mtab to find openeral entries
-    let mounts = std::fs::read_to_string("/proc/mounts")
-        .map_err(FsError::IoError)?;
+    let mounts = std::fs::read_to_string("/proc/mounts").map_err(FsError::IoError)?;
 
     let mut found = false;
     for line in mounts.lines() {

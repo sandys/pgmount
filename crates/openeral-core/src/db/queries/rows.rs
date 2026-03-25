@@ -8,12 +8,7 @@ use super::quote_ident;
 
 /// Characters that must be percent-encoded in PK display names.
 /// Encodes: / , = % and all control characters
-const PK_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b'/')
-    .add(b',')
-    .add(b'=')
-    .add(b'%')
-    .add(b'\0');
+const PK_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'/').add(b',').add(b'=').add(b'%').add(b'\0');
 
 pub fn encode_pk_value(value: &str) -> String {
     utf8_percent_encode(value, PK_ENCODE_SET).to_string()
@@ -38,7 +33,9 @@ pub async fn query_rows(
     let client = super::get_client(pool).await?;
 
     if pk_columns.is_empty() {
-        return Err(FsError::DatabaseError("No primary key columns specified".to_string()));
+        return Err(FsError::DatabaseError(
+            "No primary key columns specified".to_string(),
+        ));
     }
 
     let select_cols: Vec<String> = pk_columns.iter().map(|c| quote_ident(c)).collect();
@@ -89,7 +86,10 @@ pub async fn query_rows(
         }
 
         let display_name = display_parts.join(",");
-        result.push(RowIdentifier { pk_values, display_name });
+        result.push(RowIdentifier {
+            pk_values,
+            display_name,
+        });
     }
 
     Ok(result)
@@ -103,7 +103,18 @@ pub async fn list_rows(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<RowIdentifier>, FsError> {
-    query_rows(pool, schema, table, pk_columns, limit, offset, None, None, &[]).await
+    query_rows(
+        pool,
+        schema,
+        table,
+        pk_columns,
+        limit,
+        offset,
+        None,
+        None,
+        &[],
+    )
+    .await
 }
 
 /// Fetch all rows from a table as text columns, in a single query.
@@ -120,10 +131,14 @@ pub async fn get_all_rows_as_text(
     // Get column names
     let col_info_query = "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position";
     let col_rows = client.query(col_info_query, &[&schema, &table]).await?;
-    let col_names: Vec<String> = col_rows.iter().map(|r| r.get::<_, String>("column_name")).collect();
+    let col_names: Vec<String> = col_rows
+        .iter()
+        .map(|r| r.get::<_, String>("column_name"))
+        .collect();
 
     // Build SELECT with ::text cast for every column
-    let select_exprs: Vec<String> = col_names.iter()
+    let select_exprs: Vec<String> = col_names
+        .iter()
         .map(|c| format!("{}::text", quote_ident(c)))
         .collect();
 
@@ -174,10 +189,14 @@ pub async fn get_row_data(
     // First get column names, then build a query that casts all to text
     let col_info_query = "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position".to_string();
     let col_rows = client.query(&col_info_query, &[&schema, &table]).await?;
-    let col_names: Vec<String> = col_rows.iter().map(|r| r.get::<_, String>("column_name")).collect();
+    let col_names: Vec<String> = col_rows
+        .iter()
+        .map(|r| r.get::<_, String>("column_name"))
+        .collect();
 
     // Build SELECT with ::text cast for every column
-    let select_exprs: Vec<String> = col_names.iter()
+    let select_exprs: Vec<String> = col_names
+        .iter()
         .map(|c| format!("{}::text", quote_ident(c)))
         .collect();
 
@@ -189,8 +208,10 @@ pub async fn get_row_data(
         where_clauses.join(" AND "),
     );
 
-    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        pk_values.iter().map(|v| v as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = pk_values
+        .iter()
+        .map(|v| v as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let rows = client.query(&query, &params).await?;
 
@@ -239,8 +260,10 @@ pub async fn get_column_value(
         where_clauses.join(" AND "),
     );
 
-    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-        pk_values.iter().map(|v| v as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = pk_values
+        .iter()
+        .map(|v| v as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
 
     let rows = client.query(&query, &params).await?;
 
@@ -292,4 +315,3 @@ fn column_to_string(row: &tokio_postgres::Row, idx: usize) -> String {
     // Fallback
     "NULL".to_string()
 }
-

@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use fuser::{
-    Errno, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, OpenFlags,
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
+    Errno, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, OpenFlags, ReplyAttr,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
 };
 use tracing::debug;
 
@@ -118,13 +118,7 @@ impl Filesystem for PgmountFilesystem {
         }
     }
 
-    fn getattr(
-        &self,
-        _req: &Request,
-        ino: INodeNo,
-        _fh: Option<FileHandle>,
-        reply: ReplyAttr,
-    ) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         let ino_u64: u64 = ino.into();
         let identity = match self.inodes.get_identity(ino_u64) {
             Some(id) => id,

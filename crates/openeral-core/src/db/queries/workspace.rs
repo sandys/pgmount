@@ -1,6 +1,23 @@
 use crate::db::queries::get_client;
 use crate::db::types::{WorkspaceConfig, WorkspaceFile, WorkspaceLayout};
 use crate::error::FsError;
+use std::ffi::CString;
+
+fn default_workspace_owner() -> (i32, i32) {
+    lookup_user_owner("sandbox")
+        .unwrap_or_else(|| unsafe { (libc::getuid() as i32, libc::getgid() as i32) })
+}
+
+fn lookup_user_owner(user: &str) -> Option<(i32, i32)> {
+    let user = CString::new(user).ok()?;
+    let passwd = unsafe { libc::getpwnam(user.as_ptr()) };
+    if passwd.is_null() {
+        return None;
+    }
+
+    let passwd = unsafe { *passwd };
+    Some((passwd.pw_uid as i32, passwd.pw_gid as i32))
+}
 
 /// Create a new workspace configuration.
 pub async fn create_workspace(
@@ -10,8 +27,8 @@ pub async fn create_workspace(
     config: &WorkspaceLayout,
 ) -> Result<(), FsError> {
     let client = get_client(pool).await?;
-    let config_json = serde_json::to_value(config)
-        .map_err(|e| FsError::SerializationError(e.to_string()))?;
+    let config_json =
+        serde_json::to_value(config).map_err(|e| FsError::SerializationError(e.to_string()))?;
 
     client
         .execute(
@@ -78,10 +95,7 @@ pub async fn list_workspaces(
 }
 
 /// Delete a workspace and all its files (CASCADE).
-pub async fn delete_workspace(
-    pool: &deadpool_postgres::Pool,
-    id: &str,
-) -> Result<(), FsError> {
+pub async fn delete_workspace(pool: &deadpool_postgres::Pool, id: &str) -> Result<(), FsError> {
     let client = get_client(pool).await?;
     let count = client
         .execute(
@@ -354,7 +368,14 @@ pub async fn rename_file(
             "UPDATE _openeral.workspace_files \
              SET path = $3, parent_path = $4, name = $5, ctime_ns = $6 \
              WHERE workspace_id = $1 AND path = $2",
-            &[&workspace_id, &old_path, &new_path, &new_parent_path, &new_name, &now_ns],
+            &[
+                &workspace_id,
+                &old_path,
+                &new_path,
+                &new_parent_path,
+                &new_name,
+                &now_ns,
+            ],
         )
         .await?;
 
@@ -396,6 +417,7 @@ pub async fn seed_from_config(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos() as i64;
+    let (uid, gid) = default_workspace_owner();
 
     // Ensure root directory exists
     let root = WorkspaceFile {
@@ -411,8 +433,8 @@ pub async fn seed_from_config(
         ctime_ns: now_ns,
         atime_ns: now_ns,
         nlink: 2,
-        uid: 1000,
-        gid: 1000,
+        uid,
+        gid,
     };
     let _ = create_file(pool, &root).await; // Ignore if exists
 
@@ -434,8 +456,8 @@ pub async fn seed_from_config(
             ctime_ns: now_ns,
             atime_ns: now_ns,
             nlink: 2,
-            uid: 1000,
-            gid: 1000,
+            uid,
+            gid,
         };
         let _ = create_file(pool, &dir).await; // Ignore if already exists
     }
@@ -459,8 +481,8 @@ pub async fn seed_from_config(
             ctime_ns: now_ns,
             atime_ns: now_ns,
             nlink: 1,
-            uid: 1000,
-            gid: 1000,
+            uid,
+            gid,
         };
         let _ = create_file(pool, &file).await; // Ignore if already exists
     }
@@ -487,69 +509,69 @@ fn seed_dir_recursive<'a>(
     count: &'a mut u64,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FsError>> + Send + 'a>> {
     Box::pin(async move {
-    let now_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as i64;
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
 
-    let mut entries = tokio::fs::read_dir(local_path)
-        .await
-        .map_err(FsError::IoError)?;
+        let mut entries = tokio::fs::read_dir(local_path)
+            .await
+            .map_err(FsError::IoError)?;
 
-    while let Some(entry) = entries.next_entry().await.map_err(FsError::IoError)? {
-        let file_type = entry.file_type().await.map_err(FsError::IoError)?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child_path = if db_path == "/" {
-            format!("/{}", name)
-        } else {
-            format!("{}/{}", db_path, name)
-        };
-
-        if file_type.is_dir() {
-            let dir = WorkspaceFile {
-                workspace_id: workspace_id.to_string(),
-                path: child_path.clone(),
-                parent_path: db_path.to_string(),
-                name: name.clone(),
-                is_dir: true,
-                content: None,
-                mode: 0o40755,
-                size: 0,
-                mtime_ns: now_ns,
-                ctime_ns: now_ns,
-                atime_ns: now_ns,
-                nlink: 2,
-                uid: 1000,
-                gid: 1000,
+        while let Some(entry) = entries.next_entry().await.map_err(FsError::IoError)? {
+            let file_type = entry.file_type().await.map_err(FsError::IoError)?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let child_path = if db_path == "/" {
+                format!("/{}", name)
+            } else {
+                format!("{}/{}", db_path, name)
             };
-            let _ = create_file(pool, &dir).await;
-            *count += 1;
-            seed_dir_recursive(pool, workspace_id, &entry.path(), &child_path, count).await?;
-        } else if file_type.is_file() {
-            let content = tokio::fs::read(entry.path())
-                .await
-                .map_err(FsError::IoError)?;
-            let file = WorkspaceFile {
-                workspace_id: workspace_id.to_string(),
-                path: child_path,
-                parent_path: db_path.to_string(),
-                name,
-                is_dir: false,
-                content: Some(content.clone()),
-                mode: 0o100644,
-                size: content.len() as i64,
-                mtime_ns: now_ns,
-                ctime_ns: now_ns,
-                atime_ns: now_ns,
-                nlink: 1,
-                uid: 1000,
-                gid: 1000,
-            };
-            let _ = create_file(pool, &file).await;
-            *count += 1;
+
+            if file_type.is_dir() {
+                let dir = WorkspaceFile {
+                    workspace_id: workspace_id.to_string(),
+                    path: child_path.clone(),
+                    parent_path: db_path.to_string(),
+                    name: name.clone(),
+                    is_dir: true,
+                    content: None,
+                    mode: 0o40755,
+                    size: 0,
+                    mtime_ns: now_ns,
+                    ctime_ns: now_ns,
+                    atime_ns: now_ns,
+                    nlink: 2,
+                    uid: 1000,
+                    gid: 1000,
+                };
+                let _ = create_file(pool, &dir).await;
+                *count += 1;
+                seed_dir_recursive(pool, workspace_id, &entry.path(), &child_path, count).await?;
+            } else if file_type.is_file() {
+                let content = tokio::fs::read(entry.path())
+                    .await
+                    .map_err(FsError::IoError)?;
+                let file = WorkspaceFile {
+                    workspace_id: workspace_id.to_string(),
+                    path: child_path,
+                    parent_path: db_path.to_string(),
+                    name,
+                    is_dir: false,
+                    content: Some(content.clone()),
+                    mode: 0o100644,
+                    size: content.len() as i64,
+                    mtime_ns: now_ns,
+                    ctime_ns: now_ns,
+                    atime_ns: now_ns,
+                    nlink: 1,
+                    uid: 1000,
+                    gid: 1000,
+                };
+                let _ = create_file(pool, &file).await;
+                *count += 1;
+            }
         }
-    }
-    Ok(())
+        Ok(())
     })
 }
 

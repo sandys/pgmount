@@ -1,17 +1,20 @@
 pub mod fuse_fd;
+pub mod list;
 pub mod mount;
 pub mod unmount;
-pub mod list;
 pub mod version;
 pub mod workspace;
 
-use clap::{Parser, Subcommand};
 use crate::error::FsError;
+use clap::{Parser, Subcommand};
 
 pub use fuse_fd::is_fuse_fd_invocation;
 
 #[derive(Parser)]
-#[command(name = "openeral", about = "Mount PostgreSQL databases as virtual filesystems")]
+#[command(
+    name = "openeral",
+    about = "Mount PostgreSQL databases as virtual filesystems"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

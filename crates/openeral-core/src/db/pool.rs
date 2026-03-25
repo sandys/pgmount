@@ -1,16 +1,20 @@
-use deadpool_postgres::{Pool, ManagerConfig, RecyclingMethod};
+use deadpool_postgres::{ManagerConfig, Pool, RecyclingMethod};
 use tokio_postgres::NoTls;
 
 use crate::error::FsError;
 
 pub type DbPool = Pool;
 
-pub fn create_pool(connection_string: &str, statement_timeout_secs: u64) -> Result<DbPool, FsError> {
-    let mut pg_config: tokio_postgres::Config = connection_string
-        .parse()
-        .map_err(|e: tokio_postgres::Error| {
-            FsError::DatabaseError(format!("Invalid connection string: {}", e))
-        })?;
+pub fn create_pool(
+    connection_string: &str,
+    statement_timeout_secs: u64,
+) -> Result<DbPool, FsError> {
+    let mut pg_config: tokio_postgres::Config =
+        connection_string
+            .parse()
+            .map_err(|e: tokio_postgres::Error| {
+                FsError::DatabaseError(format!("Invalid connection string: {}", e))
+            })?;
 
     // Set statement timeout as a connection-level default
     pg_config.options(format!("-c statement_timeout={}s", statement_timeout_secs));

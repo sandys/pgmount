@@ -3,9 +3,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use fuser::{
-    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
-    OpenFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
-    ReplyOpen, ReplyWrite, RenameFlags, Request, TimeOrNow, WriteFlags,
+    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, OpenFlags,
+    RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyWrite, Request, TimeOrNow, WriteFlags,
 };
 use tracing::{debug, warn};
 
@@ -38,11 +38,7 @@ pub struct WorkspaceFilesystem {
 }
 
 impl WorkspaceFilesystem {
-    pub fn new(
-        pool: DbPool,
-        config: &WorkspaceMountConfig,
-        rt: tokio::runtime::Handle,
-    ) -> Self {
+    pub fn new(pool: DbPool, config: &WorkspaceMountConfig, rt: tokio::runtime::Handle) -> Self {
         Self {
             rt,
             pool,
@@ -148,29 +144,27 @@ impl Filesystem for WorkspaceFilesystem {
         };
 
         let child_path = Self::child_path(&parent_path, &name_str);
-        match self
-            .rt
-            .block_on(ws_queries::get_file(&self.pool, &self.workspace_id, &child_path))
-        {
+        match self.rt.block_on(ws_queries::get_file(
+            &self.pool,
+            &self.workspace_id,
+            &child_path,
+        )) {
             Ok(file) => {
                 let child_ino = self.inodes.get_or_insert(&child_path);
                 let attr = Self::file_to_attr(child_ino, &file);
                 reply.entry(&TTL, &attr, Generation(0));
             }
             Err(e) => {
-                debug!("workspace lookup({}, {:?}) failed: {}", parent_ino, name_str, e);
+                debug!(
+                    "workspace lookup({}, {:?}) failed: {}",
+                    parent_ino, name_str, e
+                );
                 reply.error(e.to_errno());
             }
         }
     }
 
-    fn getattr(
-        &self,
-        _req: &Request,
-        ino: INodeNo,
-        _fh: Option<FileHandle>,
-        reply: ReplyAttr,
-    ) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         let ino_u64: u64 = ino.into();
         let path = match self.inodes.get_path(ino_u64) {
             Some(p) => p,
@@ -280,10 +274,11 @@ impl Filesystem for WorkspaceFilesystem {
             }
         };
 
-        let children = match self
-            .rt
-            .block_on(ws_queries::list_children(&self.pool, &self.workspace_id, &path))
-        {
+        let children = match self.rt.block_on(ws_queries::list_children(
+            &self.pool,
+            &self.workspace_id,
+            &path,
+        )) {
             Ok(c) => c,
             Err(e) => {
                 debug!("workspace readdir({}) failed: {}", ino_u64, e);
@@ -528,7 +523,13 @@ impl Filesystem for WorkspaceFilesystem {
                         dirty: false,
                     },
                 );
-                reply.created(&TTL, &attr, Generation(0), FileHandle(fh), FopenFlags::empty());
+                reply.created(
+                    &TTL,
+                    &attr,
+                    Generation(0),
+                    FileHandle(fh),
+                    FopenFlags::empty(),
+                );
             }
             Err(e) => {
                 debug!("workspace create failed: {}", e);
@@ -616,10 +617,11 @@ impl Filesystem for WorkspaceFilesystem {
 
         let child_path = Self::child_path(&parent_path, &name_str);
 
-        match self
-            .rt
-            .block_on(ws_queries::delete_file(&self.pool, &self.workspace_id, &child_path))
-        {
+        match self.rt.block_on(ws_queries::delete_file(
+            &self.pool,
+            &self.workspace_id,
+            &child_path,
+        )) {
             Ok(()) => {
                 self.inodes.remove(&child_path);
                 reply.ok();
@@ -651,10 +653,11 @@ impl Filesystem for WorkspaceFilesystem {
 
         let child_path = Self::child_path(&parent_path, &name_str);
 
-        match self
-            .rt
-            .block_on(ws_queries::delete_directory(&self.pool, &self.workspace_id, &child_path))
-        {
+        match self.rt.block_on(ws_queries::delete_directory(
+            &self.pool,
+            &self.workspace_id,
+            &child_path,
+        )) {
             Ok(()) => {
                 self.inodes.remove(&child_path);
                 reply.ok();
@@ -713,10 +716,11 @@ impl Filesystem for WorkspaceFilesystem {
         let new_path = Self::child_path(&newparent_path, &newname_str);
 
         // Check if the source is a directory (need to rename the tree too)
-        let is_dir = match self
-            .rt
-            .block_on(ws_queries::get_file(&self.pool, &self.workspace_id, &old_path))
-        {
+        let is_dir = match self.rt.block_on(ws_queries::get_file(
+            &self.pool,
+            &self.workspace_id,
+            &old_path,
+        )) {
             Ok(f) => f.is_dir,
             Err(e) => {
                 reply.error(e.to_errno());

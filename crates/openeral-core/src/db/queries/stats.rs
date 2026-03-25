@@ -33,11 +33,7 @@ pub async fn get_row_count_estimate(
 
 /// Returns the exact row count via COUNT(*).
 /// This performs a full table scan and may be slow on large tables.
-pub async fn get_exact_row_count(
-    pool: &Pool,
-    schema: &str,
-    table: &str,
-) -> Result<i64, FsError> {
+pub async fn get_exact_row_count(pool: &Pool, schema: &str, table: &str) -> Result<i64, FsError> {
     let client = super::get_client(pool).await?;
 
     let query = format!(

@@ -1,8 +1,8 @@
+use super::table;
 use crate::db::queries::rows;
 use crate::error::FsError;
 use crate::fs::inode::NodeIdentity;
 use crate::fs::nodes::{DirEntry, NodeContext};
-use super::table;
 
 /// Lookup a child inside page_N/ — these are row directories
 pub async fn lookup(
@@ -41,17 +41,25 @@ pub async fn readdir(
     let row_offset = ((page as i64) - 1) * page_size;
 
     let row_ids = rows::list_rows(
-        ctx.pool, schema, table_name, &pk.column_names,
-        page_size, row_offset,
-    ).await?;
+        ctx.pool,
+        schema,
+        table_name,
+        &pk.column_names,
+        page_size,
+        row_offset,
+    )
+    .await?;
 
-    Ok(row_ids.iter().map(|row_id| DirEntry {
-        name: row_id.display_name.clone(),
-        identity: NodeIdentity::Row {
-            schema: schema.to_string(),
-            table: table_name.to_string(),
-            pk_display: row_id.display_name.clone(),
-        },
-        kind: fuser::FileType::Directory,
-    }).collect())
+    Ok(row_ids
+        .iter()
+        .map(|row_id| DirEntry {
+            name: row_id.display_name.clone(),
+            identity: NodeIdentity::Row {
+                schema: schema.to_string(),
+                table: table_name.to_string(),
+                pk_display: row_id.display_name.clone(),
+            },
+            kind: fuser::FileType::Directory,
+        })
+        .collect())
 }

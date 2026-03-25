@@ -34,6 +34,7 @@ const SANDBOX_MANAGED_VALUE: &str = "openshell";
 const GPU_RUNTIME_CLASS_NAME: &str = "nvidia";
 const GPU_RESOURCE_NAME: &str = "nvidia.com/gpu";
 const GPU_RESOURCE_QUANTITY: &str = "1";
+const FUSE_RESOURCE_QUANTITY: &str = "1";
 
 #[derive(Clone)]
 pub struct SandboxClient {
@@ -52,6 +53,9 @@ pub struct SandboxClient {
     /// When non-empty, sandbox pods get `hostAliases` entries mapping
     /// `host.docker.internal` and `host.openshell.internal` to this IP.
     host_gateway_ip: String,
+    /// When non-empty, sandbox pods request this extended resource to trigger
+    /// kubelet device-plugin allocation for `/dev/fuse`.
+    sandbox_fuse_resource_name: String,
 }
 
 impl std::fmt::Debug for SandboxClient {
@@ -75,6 +79,7 @@ impl SandboxClient {
         ssh_handshake_skew_secs: u64,
         client_tls_secret_name: String,
         host_gateway_ip: String,
+        sandbox_fuse_resource_name: String,
     ) -> Result<Self, KubeError> {
         let mut config = match kube::Config::incluster() {
             Ok(c) => c,
@@ -97,6 +102,7 @@ impl SandboxClient {
             ssh_handshake_skew_secs,
             client_tls_secret_name,
             host_gateway_ip,
+            sandbox_fuse_resource_name,
         })
     }
 
@@ -212,6 +218,7 @@ impl SandboxClient {
             self.ssh_handshake_skew_secs(),
             &self.client_tls_secret_name,
             &self.host_gateway_ip,
+            &self.sandbox_fuse_resource_name,
         );
         let api = self.api();
 
@@ -766,6 +773,7 @@ fn sandbox_to_k8s_spec(
     ssh_handshake_skew_secs: u64,
     client_tls_secret_name: &str,
     host_gateway_ip: &str,
+    sandbox_fuse_resource_name: &str,
 ) -> serde_json::Value {
     let mut root = serde_json::Map::new();
     if let Some(spec) = spec {
@@ -795,6 +803,7 @@ fn sandbox_to_k8s_spec(
                     &spec.environment,
                     client_tls_secret_name,
                     host_gateway_ip,
+                    sandbox_fuse_resource_name,
                 ),
             );
             if !template.agent_socket.is_empty() {
@@ -829,6 +838,7 @@ fn sandbox_to_k8s_spec(
                 spec_env,
                 client_tls_secret_name,
                 host_gateway_ip,
+                sandbox_fuse_resource_name,
             ),
         );
     }
@@ -853,6 +863,7 @@ fn sandbox_template_to_k8s(
     spec_environment: &std::collections::HashMap<String, String>,
     client_tls_secret_name: &str,
     host_gateway_ip: &str,
+    sandbox_fuse_resource_name: &str,
 ) -> serde_json::Value {
     if let Some(pod_template) = struct_to_json(&template.pod_template) {
         return inject_pod_template(
@@ -870,6 +881,7 @@ fn sandbox_template_to_k8s(
             spec_environment,
             client_tls_secret_name,
             host_gateway_ip,
+            sandbox_fuse_resource_name,
         );
     }
 
@@ -961,7 +973,14 @@ fn sandbox_template_to_k8s(
         );
     }
 
-    if let Some(resources) = container_resources(template, gpu) {
+    if let Some(mut resources) = container_resources(template, gpu) {
+        if !sandbox_fuse_resource_name.is_empty() {
+            apply_fuse_limit(&mut resources, sandbox_fuse_resource_name);
+        }
+        container.insert("resources".to_string(), resources);
+    } else if !sandbox_fuse_resource_name.is_empty() {
+        let mut resources = serde_json::json!({});
+        apply_fuse_limit(&mut resources, sandbox_fuse_resource_name);
         container.insert("resources".to_string(), resources);
     }
     spec.insert(
@@ -1011,7 +1030,7 @@ fn inject_pod_template(
     mut pod_template: serde_json::Value,
     template: &SandboxTemplate,
     gpu: bool,
-    default_image: &str,
+    _default_image: &str,
     image_pull_policy: &str,
     sandbox_id: &str,
     sandbox_name: &str,
@@ -1022,6 +1041,7 @@ fn inject_pod_template(
     spec_environment: &std::collections::HashMap<String, String>,
     client_tls_secret_name: &str,
     host_gateway_ip: &str,
+    sandbox_fuse_resource_name: &str,
 ) -> serde_json::Value {
     let Some(spec) = pod_template
         .get_mut("spec")
@@ -1123,6 +1143,9 @@ fn inject_pod_template(
         if gpu {
             apply_gpu_to_container(container);
         }
+        if !sandbox_fuse_resource_name.is_empty() {
+            apply_fuse_to_container(container, sandbox_fuse_resource_name);
+        }
     }
 
     // Always side-load the supervisor binary from the node filesystem
@@ -1156,10 +1179,31 @@ fn apply_gpu_to_container(container: &mut serde_json::Value) {
     }
 }
 
+fn apply_fuse_to_container(container: &mut serde_json::Value, resource_name: &str) {
+    if let Some(container_obj) = container.as_object_mut() {
+        let resources = container_obj
+            .entry("resources")
+            .or_insert_with(|| serde_json::json!({}));
+        apply_fuse_limit(resources, resource_name);
+    }
+}
+
 fn apply_gpu_limit(resources: &mut serde_json::Value) {
+    apply_named_resource_limit(resources, GPU_RESOURCE_NAME, GPU_RESOURCE_QUANTITY);
+}
+
+fn apply_fuse_limit(resources: &mut serde_json::Value, resource_name: &str) {
+    apply_named_resource_limit(resources, resource_name, FUSE_RESOURCE_QUANTITY);
+}
+
+fn apply_named_resource_limit(
+    resources: &mut serde_json::Value,
+    resource_name: &str,
+    quantity: &str,
+) {
     let Some(resources_obj) = resources.as_object_mut() else {
         *resources = serde_json::json!({});
-        return apply_gpu_limit(resources);
+        return apply_named_resource_limit(resources, resource_name, quantity);
     };
 
     let limits = resources_obj
@@ -1167,13 +1211,10 @@ fn apply_gpu_limit(resources: &mut serde_json::Value) {
         .or_insert_with(|| serde_json::json!({}));
     let Some(limits_obj) = limits.as_object_mut() else {
         *limits = serde_json::json!({});
-        return apply_gpu_limit(resources);
+        return apply_named_resource_limit(resources, resource_name, quantity);
     };
 
-    limits_obj.insert(
-        GPU_RESOURCE_NAME.to_string(),
-        serde_json::json!(GPU_RESOURCE_QUANTITY),
-    );
+    limits_obj.insert(resource_name.to_string(), serde_json::json!(quantity));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1844,6 +1885,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "",
             "",
+            "",
         );
 
         assert_eq!(
@@ -1888,6 +1930,7 @@ mod tests {
             "secret",
             300,
             &std::collections::HashMap::new(),
+            "",
             "",
             "",
         );
@@ -1950,6 +1993,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "",
             "",
+            "",
         );
 
         assert_eq!(
@@ -1960,6 +2004,100 @@ mod tests {
             pod_template["spec"]["containers"][0]["resources"]["limits"][GPU_RESOURCE_NAME],
             serde_json::json!(GPU_RESOURCE_QUANTITY)
         );
+    }
+
+    #[test]
+    fn fuse_sandbox_adds_device_limit() {
+        let pod_template = sandbox_template_to_k8s(
+            &SandboxTemplate::default(),
+            false,
+            "openshell/sandbox:latest",
+            "",
+            "sandbox-id",
+            "sandbox-name",
+            "https://gateway.example.com",
+            "0.0.0.0:2222",
+            "secret",
+            300,
+            &std::collections::HashMap::new(),
+            "",
+            "",
+            "github.com/fuse",
+        );
+
+        assert_eq!(
+            pod_template["spec"]["containers"][0]["resources"]["limits"]["github.com/fuse"],
+            serde_json::json!("1")
+        );
+    }
+
+    #[test]
+    fn fuse_sandbox_preserves_existing_resource_limits() {
+        let template = SandboxTemplate {
+            resources: Some(Struct {
+                fields: [(
+                    "limits".to_string(),
+                    Value {
+                        kind: Some(Kind::StructValue(Struct {
+                            fields: [("cpu".to_string(), string_value("2"))]
+                                .into_iter()
+                                .collect(),
+                        })),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            ..SandboxTemplate::default()
+        };
+
+        let pod_template = sandbox_template_to_k8s(
+            &template,
+            false,
+            "openshell/sandbox:latest",
+            "",
+            "sandbox-id",
+            "sandbox-name",
+            "https://gateway.example.com",
+            "0.0.0.0:2222",
+            "secret",
+            300,
+            &std::collections::HashMap::new(),
+            "",
+            "",
+            "github.com/fuse",
+        );
+
+        let limits = &pod_template["spec"]["containers"][0]["resources"]["limits"];
+        assert_eq!(limits["cpu"], serde_json::json!("2"));
+        assert_eq!(limits["github.com/fuse"], serde_json::json!("1"));
+    }
+
+    #[test]
+    fn gpu_and_fuse_sandbox_add_both_resource_limits() {
+        let pod_template = sandbox_template_to_k8s(
+            &SandboxTemplate::default(),
+            true,
+            "openshell/sandbox:latest",
+            "",
+            "sandbox-id",
+            "sandbox-name",
+            "https://gateway.example.com",
+            "0.0.0.0:2222",
+            "secret",
+            300,
+            &std::collections::HashMap::new(),
+            "",
+            "",
+            "github.com/fuse",
+        );
+
+        let limits = &pod_template["spec"]["containers"][0]["resources"]["limits"];
+        assert_eq!(
+            limits[GPU_RESOURCE_NAME],
+            serde_json::json!(GPU_RESOURCE_QUANTITY)
+        );
+        assert_eq!(limits["github.com/fuse"], serde_json::json!("1"));
     }
 
     #[test]
@@ -1978,6 +2116,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "",
             "172.17.0.1",
+            "",
         );
 
         let host_aliases = pod_template["spec"]["hostAliases"]
@@ -2006,6 +2145,7 @@ mod tests {
             "secret",
             300,
             &std::collections::HashMap::new(),
+            "",
             "",
             "",
         );
@@ -2066,6 +2206,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "",
             "192.168.65.2",
+            "",
         );
 
         let host_aliases = pod_template["spec"]["hostAliases"]
@@ -2090,6 +2231,7 @@ mod tests {
             300,
             &std::collections::HashMap::new(),
             "my-tls-secret",
+            "",
             "",
         );
 
