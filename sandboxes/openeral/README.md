@@ -22,7 +22,7 @@ From there, the supported flow is:
 
 ### Local Development
 
-If you are developing locally, build and publish both images to a local registry first.
+If you are developing locally, build and publish all three images to a local registry first.
 
 Start a local registry:
 
@@ -36,10 +36,23 @@ Build and push the cluster image:
 docker build \
   -f vendor/openshell/deploy/docker/Dockerfile.images \
   --target cluster \
-  -t 127.0.0.1:5000/openshell/openeral-cluster:dev \
+  --build-arg OPENERAL_DEFAULT_IMAGE_TAG=dev \
+  -t 127.0.0.1:5000/openshell/openeral/cluster:dev \
   vendor/openshell
 
-docker push 127.0.0.1:5000/openshell/openeral-cluster:dev
+docker push 127.0.0.1:5000/openshell/openeral/cluster:dev
+```
+
+Build and push the matching gateway image:
+
+```bash
+docker build \
+  -f vendor/openshell/deploy/docker/Dockerfile.images \
+  --target gateway \
+  -t 127.0.0.1:5000/openshell/openeral/gateway:dev \
+  vendor/openshell
+
+docker push 127.0.0.1:5000/openshell/openeral/gateway:dev
 ```
 
 Build and push the sandbox image:
@@ -47,25 +60,26 @@ Build and push the sandbox image:
 ```bash
 docker build \
   -f sandboxes/openeral/Dockerfile \
-  -t 127.0.0.1:5000/openshell/openeral-sandbox:dev \
+  -t 127.0.0.1:5000/openshell/openeral/sandbox:dev \
   .
 
-docker push 127.0.0.1:5000/openshell/openeral-sandbox:dev
+docker push 127.0.0.1:5000/openshell/openeral/sandbox:dev
 ```
 
 Then use:
 
-- `OPENSHELL_CLUSTER_IMAGE=127.0.0.1:5000/openshell/openeral-cluster:dev`
+- `OPENSHELL_CLUSTER_IMAGE=127.0.0.1:5000/openshell/openeral/cluster:dev`
 - `OPENSHELL_REGISTRY_HOST=172.17.0.1:5000`
 - `OPENSHELL_REGISTRY_INSECURE=true`
-- `OPENERAL_SANDBOX_IMAGE=172.17.0.1:5000/openshell/openeral-sandbox:dev`
+- `OPENSHELL_IMAGE_REPO_BASE=172.17.0.1:5000/openshell/openeral`
+- `OPENERAL_SANDBOX_IMAGE=172.17.0.1:5000/openshell/openeral/sandbox:dev`
 
-The cluster image is pulled by host Docker, so `127.0.0.1:5000` is correct there. Sandbox images are pulled from inside the cluster container, so use `172.17.0.1:5000` for the sandbox image reference and registry host.
+The cluster image is pulled by host Docker, so `127.0.0.1:5000` is correct there. Gateway and sandbox images are pulled from inside the cluster container, so use `172.17.0.1:5000` for `OPENSHELL_IMAGE_REPO_BASE`, the sandbox image reference, and the registry host.
 
 ## Start Gateway
 
 ```bash
-export OPENSHELL_CLUSTER_IMAGE='ghcr.io/sandys/openeral-cluster:latest'
+export OPENSHELL_CLUSTER_IMAGE='ghcr.io/sandys/openeral/cluster:latest'
 export OPENSHELL_REGISTRY_HOST='ghcr.io'
 export OPENSHELL_GATEWAY_NAME=openeral
 
@@ -88,7 +102,7 @@ openshell provider create \
 ## One-Command Launch
 
 ```bash
-export OPENERAL_SANDBOX_IMAGE='ghcr.io/sandys/openeral-sandbox:latest'
+export OPENERAL_SANDBOX_IMAGE='ghcr.io/sandys/openeral/sandbox:latest'
 export OPENERAL_SANDBOX_NAME=openeral-demo
 
 set -a
@@ -104,6 +118,8 @@ openshell sandbox create \
   --auto-providers \
   --no-tty -- env HOME=/home/agent claude
 ```
+
+The cluster image resolves the matching gateway image automatically. For repeatable deployments, prefer the same immutable tag for both `OPENSHELL_CLUSTER_IMAGE` and `OPENERAL_SANDBOX_IMAGE`.
 
 This is the preferred and supported user flow:
 

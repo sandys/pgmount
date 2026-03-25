@@ -17,6 +17,8 @@ ARG K9S_VERSION=v0.50.18
 ARG HELM_VERSION=v3.17.3
 ARG NVIDIA_CONTAINER_TOOLKIT_VERSION=1.18.2-1
 ARG CRANE_VERSION=v0.20.6
+ARG OPENERAL_DEFAULT_IMAGE_REPO_BASE=""
+ARG OPENERAL_DEFAULT_IMAGE_TAG=""
 ARG KLIPPER_HELM_IMAGE=rancher/klipper-helm:v0.9.14-build20260210
 ARG COREDNS_IMAGE=rancher/mirrored-coredns-coredns:1.14.1
 ARG LOCAL_PATH_PROVISIONER_IMAGE=rancher/local-path-provisioner:v0.0.34
@@ -269,6 +271,8 @@ RUN mkdir -p /preload && \
 # Final cluster image
 # ---------------------------------------------------------------------------
 FROM nvcr.io/nvidia/base/ubuntu:noble-20251013 AS cluster
+ARG OPENERAL_DEFAULT_IMAGE_REPO_BASE
+ARG OPENERAL_DEFAULT_IMAGE_TAG
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -284,7 +288,9 @@ COPY --from=k3s /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/k3s-ca-certifi
 COPY --from=k3s /usr/share/zoneinfo/ /usr/share/zoneinfo/
 
 ENV PATH="/var/lib/rancher/k3s/data/cni:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/bin/aux" \
-    CRI_CONFIG_FILE="/var/lib/rancher/k3s/agent/etc/crictl.yaml"
+    CRI_CONFIG_FILE="/var/lib/rancher/k3s/agent/etc/crictl.yaml" \
+    OPENERAL_DEFAULT_IMAGE_REPO_BASE="${OPENERAL_DEFAULT_IMAGE_REPO_BASE}" \
+    OPENERAL_DEFAULT_IMAGE_TAG="${OPENERAL_DEFAULT_IMAGE_TAG}"
 
 COPY --from=nvidia-toolkit /usr/bin/nvidia-cdi-hook /usr/bin/
 COPY --from=nvidia-toolkit /usr/bin/nvidia-container-runtime /usr/bin/

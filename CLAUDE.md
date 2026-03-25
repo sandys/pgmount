@@ -37,9 +37,8 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 - `crates/openeral-core/migrations/` — SQL migrations (V1–V4), managed by refinery
 - `openeral-shell/` — legacy entrypoint-based sandbox path kept for reference; not the supported OpenShell flow
 - `sandboxes/openeral/` — current OpenShell sandbox image (OpenClaw-based, supervisor-managed via `/etc/fstab`)
-- `vendor/openshell/` — vendored OpenShell fork used to build the custom cluster image
-- `.github/workflows/build-cluster.yml` — publishes `openeral-cluster`
-- `.github/workflows/build-sandbox.yml` — publishes `openeral-sandbox`
+- `vendor/openshell/` — vendored OpenShell fork used to build the custom cluster and gateway images
+- `.github/workflows/publish-images.yml` — atomically publishes `openeral/{cluster,gateway,sandbox}`
 - `tests/test_fuse_mount.sh` — FUSE mount integration tests (bash)
 
 ## Two Filesystems
@@ -58,7 +57,7 @@ Do NOT use `cargo build` or `cargo test` directly on the host. The dev container
 ## Hard Rules
 
 - **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
-- **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom cluster image plus the published `openeral-sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
+- **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom `openeral/cluster` image plus the published `openeral/sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
 - **Never delete, move, or overwrite user files without explicit permission.** This includes files that appear sensitive, secret-bearing, incorrect, or security-critical.
 - **If a file appears risky, stop and ask first.** Report the concern clearly, but do not remove, rewrite, chmod, or hide the file on your own.
 

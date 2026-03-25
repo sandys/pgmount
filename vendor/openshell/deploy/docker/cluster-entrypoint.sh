@@ -25,6 +25,8 @@
 
 set -e
 
+UPSTREAM_DEFAULT_IMAGE_REPO_BASE="ghcr.io/nvidia/openshell"
+
 RESOLV_CONF="/etc/rancher/k3s/resolv.conf"
 
 has_default_route() {
@@ -359,9 +361,14 @@ fi
 # images already present in containerd instead of pulling from the registry.
 HELMCHART="/var/lib/rancher/k3s/server/manifests/openshell-helmchart.yaml"
 
-if [ -n "${IMAGE_REPO_BASE:-}" ] && [ -f "$HELMCHART" ]; then
-    echo "Setting image repository base: ${IMAGE_REPO_BASE}"
-    sed -i -E "s|repository:[[:space:]]*[^[:space:]]+|repository: ${IMAGE_REPO_BASE}/gateway|" "$HELMCHART"
+GATEWAY_IMAGE_REPO_BASE="${IMAGE_REPO_BASE:-}"
+if [ -n "${OPENERAL_DEFAULT_IMAGE_REPO_BASE:-}" ] && { [ -z "$GATEWAY_IMAGE_REPO_BASE" ] || [ "$GATEWAY_IMAGE_REPO_BASE" = "$UPSTREAM_DEFAULT_IMAGE_REPO_BASE" ]; }; then
+    GATEWAY_IMAGE_REPO_BASE="${OPENERAL_DEFAULT_IMAGE_REPO_BASE}"
+fi
+
+if [ -n "${GATEWAY_IMAGE_REPO_BASE:-}" ] && [ -f "$HELMCHART" ]; then
+    echo "Setting image repository base: ${GATEWAY_IMAGE_REPO_BASE}"
+    sed -i -E "s|repository:[[:space:]]*[^[:space:]]+|repository: ${GATEWAY_IMAGE_REPO_BASE}/gateway|" "$HELMCHART"
     # Sandbox images come from the community registry — do not override
 fi
 
@@ -390,11 +397,12 @@ if [ -n "${PUSH_IMAGE_REFS:-}" ] && [ -f "$HELMCHART" ]; then
     fi
 fi
 
-if [ -n "${IMAGE_TAG:-}" ] && [ -f "$HELMCHART" ]; then
-    echo "Overriding gateway image tag to: ${IMAGE_TAG}"
+GATEWAY_IMAGE_TAG="${OPENERAL_DEFAULT_IMAGE_TAG:-${IMAGE_TAG:-}}"
+if [ -n "${GATEWAY_IMAGE_TAG:-}" ] && [ -f "$HELMCHART" ]; then
+    echo "Overriding gateway image tag to: ${GATEWAY_IMAGE_TAG}"
     # server image tag (standalone value field)
     # Handle both quoted and unquoted defaults: tag: "latest" / tag: latest
-    sed -i -E "s|tag:[[:space:]]*\"?latest\"?|tag: \"${IMAGE_TAG}\"|" "$HELMCHART"
+    sed -i -E "s|tag:[[:space:]]*\"?latest\"?|tag: \"${GATEWAY_IMAGE_TAG}\"|" "$HELMCHART"
 fi
 
 if [ -n "${IMAGE_PULL_POLICY:-}" ] && [ -f "$HELMCHART" ]; then

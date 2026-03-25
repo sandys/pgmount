@@ -579,6 +579,7 @@ pub async fn ensure_container(
         .unwrap_or_else(|| REGISTRY_NAMESPACE_DEFAULT.to_string());
     let image_repo_base = env_non_empty("IMAGE_REPO_BASE")
         .or_else(|| env_non_empty("OPENSHELL_IMAGE_REPO_BASE"))
+        .or_else(|| image::derive_image_repo_base_from_cluster_ref(image_ref))
         .unwrap_or_else(|| {
             if registry_host == DEFAULT_REGISTRY {
                 // For ghcr.io the default namespace is the full org path.
