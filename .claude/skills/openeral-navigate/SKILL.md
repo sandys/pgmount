@@ -1,88 +1,57 @@
 ---
 name: openeral-navigate
-description: Navigate a PostgreSQL database mounted at /db and manage persistent workspace state
+description: Use /db for read-only database context while keeping Claude state under /home/agent
 ---
 
-# OpenEral — Database at /db, Workspace at /home/agent
+# OpenEral Navigate
 
-You have two mounted filesystems:
+This skill is for the database side of the Claude Code sandbox.
 
-- **`/db`** — read-only PostgreSQL database. Browse schemas, tables, rows as directories and files.
-- **`/home/agent`** — read-write workspace backed by PostgreSQL.
+The priority order is:
 
-Important:
+1. keep Claude running with `HOME=/home/agent`
+2. use `/db` only when Claude needs live database context
 
-- `/home/agent` is the durable workspace
-- some sessions still start with `HOME=/sandbox`
-- if you want tool state to persist, write under `/home/agent` directly or run the tool with `HOME=/home/agent`
-
-## Database: Quick Reference
+## First Checks
 
 ```bash
-# Discover structure
-ls /db/                                        # list schemas
-ls /db/public/                                 # list tables
-cat /db/public/users/.info/columns.json        # column definitions
-cat /db/public/users/.info/count               # row count
-cat /db/public/users/.info/primary_key         # primary key
+grep -E ' /db | /home/agent ' /proc/mounts
+```
 
-# Read rows
-cat /db/public/users/page_1/1/row.json         # full row as JSON
-cat /db/public/users/page_1/1/email            # single column
+If either mount is missing, stop treating it as a data-navigation problem. It is an infrastructure problem.
 
-# Filter (FAST — runs a targeted query)
+## Fast Database Reads
+
+Use `/db` like this:
+
+```bash
+ls /db
+ls /db/public
+cat /db/public/users/.info/columns.json
+cat /db/public/users/.info/count
 cat /db/public/users/.filter/id/42/42/row.json
-ls /db/public/users/.filter/active/true/
-
-# Sort
 ls /db/public/users/.order/created_at/desc/
-
-# Export
-cat /db/public/users/.export/data.csv/page_1.csv
-cat /db/public/users/.export/data.json/page_1.json
 ```
 
-## Database: Filesystem Layout
+Use `.filter/` for targeted lookups. It is the cheapest path for Claude-driven database inspection.
 
-```
-/db/<schema>/<table>/
-  .info/columns.json     — column names, types, nullability
-  .info/schema.sql       — CREATE TABLE statement
-  .info/count            — row count
-  .info/primary_key      — PK column(s)
-  .export/data.json/     — paginated JSON export (page_1.json, page_2.json, ...)
-  .export/data.csv/      — paginated CSV export
-  .filter/<col>/<val>/   — matching row directories
-  .order/<col>/asc|desc/ — sorted row directories
-  .indexes/<name>        — index definitions
-  page_1/                — first 1000 rows
-    <pk>/                — row directory (named by primary key value)
-      <column>           — column value as plain text
-      row.json           — full row as JSON
-      row.csv            — full row as CSV
-      row.yaml           — full row as YAML
-  page_2/                — next 1000 rows
-```
+## Workspace Rule
 
-## Workspace: Persistent State
-
-Everything written under `/home/agent` persists across reconnects to the same sandbox.
+Any notes, scripts, or generated files that Claude should keep must go under `/home/agent`.
 
 ```bash
-# Use the persistent workspace directly
-mkdir -p /home/agent/projects/myapp
-echo "hello" > /home/agent/projects/myapp/notes.txt
+mkdir -p /home/agent/work
+printf 'notes\n' > /home/agent/work/todo.txt
+```
 
-# For tools that store state under $HOME
+If a tool stores state under `$HOME`, run it with:
+
+```bash
 HOME=/home/agent <tool>
 ```
 
-## Rules
+## What Not To Do
 
-1. **`/db` is read-only.** Any write attempt returns "Read-only file system".
-2. **Always check `.info/count` before scanning a table.** Tables with millions of rows have thousands of pages — don't `ls` them all.
-3. **Use `.filter/` for lookups.** It runs a targeted SQL query and is much faster than browsing pages.
-4. **Pages contain up to 1000 rows** (configurable via `OPENERAL_PAGE_SIZE`).
-5. **Composite primary keys** use the format `col1=val1,col2=val2` as directory names.
-6. **NULL values** appear as empty files.
-7. **Persistent state belongs in `/home/agent`.** Do not assume `/sandbox` or the current `$HOME` is durable.
+- do not write to `/db`
+- do not assume `/sandbox` is durable
+- do not scan huge tables blindly when `.filter/` or `.info/count` will answer the question
