@@ -5,6 +5,12 @@ set -euo pipefail
 : "${OPENERAL_GATEWAY_IMAGE:?must be set}"
 : "${OPENERAL_SANDBOX_IMAGE:?must be set}"
 
+command -v openshell >/dev/null 2>&1 || {
+    echo "openshell CLI is not on PATH" >&2
+    exit 1
+}
+openshell --version
+
 GATEWAY_NAME="${OPENSHELL_GATEWAY_NAME:-openeral-smoke-${RANDOM}}"
 GATEWAY_PORT="${OPENSHELL_GATEWAY_PORT:-8080}"
 SANDBOX_NAME="${OPENERAL_SANDBOX_NAME:-openeral-smoke-${RANDOM}}"

@@ -4,6 +4,8 @@ This sandbox exists for one purpose: run Claude Code in OpenShell with a persist
 
 `/db` is mounted too, but it is secondary. The primary success criterion is that Claude writes `~/.claude` into `/home/agent` and that those files survive reconnects.
 
+The user-facing CLI remains the stock upstream `openshell` release. This repo customizes the runtime images, not the CLI command users invoke.
+
 ## Fresh Machine Flow
 
 Assume a fresh machine with:
@@ -46,6 +48,8 @@ Unsupported combinations:
 - openeral `cluster` + upstream `gateway`
 - upstream `cluster` + openeral `gateway`
 - upstream `cluster` + openeral `sandbox`
+
+The vendored OpenShell source in this repo exists to build the custom `cluster` and `gateway` images. It is not the supported source of the user-facing CLI.
 
 ### Local Development
 
@@ -154,6 +158,8 @@ This is the preferred and supported user flow:
 - no wrapper scripts
 - no `sandbox upload`
 - no manual `sandbox connect` just to start Claude
+
+The same rule applies in CI: release smoke installs the upstream released `openshell` CLI and drives the published openeral images through that CLI path.
 
 ## Runtime Contract
 

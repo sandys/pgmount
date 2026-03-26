@@ -31,6 +31,8 @@ The runtime dependency is still a 3-image set:
 
 Only `cluster` and `sandbox` are user-facing. The matching `gateway` image is resolved internally from the cluster image and must not be mixed with upstream OpenShell images.
 
+The CLI itself is still the stock upstream `openshell` release. This repo changes the images behind that CLI flow, not the user-facing command surface.
+
 The supported Claude launch still remains:
 
 ```bash

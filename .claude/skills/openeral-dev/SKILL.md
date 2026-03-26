@@ -31,6 +31,8 @@ The supported runtime is a coupled 3-image set:
 
 Do not assume any mixed upstream/openeral image combination is valid.
 
+The supported CLI is still the upstream released `openshell` binary. The vendored OpenShell tree is kept to build the custom `cluster` and `gateway` images, not to provide a separate CLI path.
+
 ## Files That Matter Most
 
 - `crates/openeral-core/src/fs/workspace.rs`
@@ -59,6 +61,8 @@ The most important validation is an end-to-end OpenShell run where:
 
 If a change affects the OpenShell path, rerun the full flow from scratch.
 
+In CI and release smoke, use the upstream OpenShell installer/release path for the CLI. Do not add vendored `openshell-cli` builds just to run smoke.
+
 ## Local Rust Validation
 
 Use the Docker dev environment:
@@ -78,6 +82,7 @@ These tests matter mainly because they protect the Claude persistence path.
 - treat workspace ownership bugs as high severity
 - treat `/dev/fuse` or `/etc/fstab` regressions as product blockers
 - keep the supported user flow to stock `openshell` commands, not wrapper scripts
+- keep CI aligned with that same path: upstream `openshell` CLI driving openeral images
 - treat cluster, gateway, and sandbox as one version-locked release set
 
 ## Failure Triage

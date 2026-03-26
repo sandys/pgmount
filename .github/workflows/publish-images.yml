@@ -132,17 +132,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.85"
-
-      - name: Cache vendored OpenShell CLI build
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: smoke-openshell-cli
-          cache-workspaces: |
-            vendor/openshell -> target
+      - name: Install upstream OpenShell CLI
+        run: |
+          set -euo pipefail
+          export OPENSHELL_INSTALL_DIR="${RUNNER_TEMP}/openshell/bin"
+          mkdir -p "$OPENSHELL_INSTALL_DIR"
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+          echo "$OPENSHELL_INSTALL_DIR" >> "$GITHUB_PATH"
+          "$OPENSHELL_INSTALL_DIR/openshell" --version
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -150,9 +147,6 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build vendored OpenShell CLI
-        run: cargo build --manifest-path vendor/openshell/Cargo.toml -p openshell-cli --release
 
       - name: Verify mixed-stack guard
         env:
@@ -180,9 +174,7 @@ jobs:
           IMAGE_TAG: latest
           OPENSHELL_REGISTRY_USERNAME: ${{ github.actor }}
           OPENSHELL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/vendor/openshell/target/release:${PATH}"
-          bash .github/scripts/smoke_openshell.sh
+        run: bash .github/scripts/smoke_openshell.sh
 
   promote:
     needs: [smoke-test]

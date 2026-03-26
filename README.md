@@ -11,6 +11,12 @@ The product goal is simple:
 
 Everything in this repo supports that flow.
 
+One important constraint:
+
+- users run the stock upstream `openshell` CLI
+- this repo ships custom `cluster`, `gateway`, and `sandbox` images
+- CI smoke validation also uses the upstream released `openshell` CLI, not a vendored locally built CLI
+
 ## Supported Outcome
 
 After setup, the command that matters is:
@@ -79,6 +85,8 @@ Unsupported combinations:
 - upstream `cluster` + openeral `gateway`
 - upstream `cluster` + openeral `sandbox`
 
+The repo still vendors OpenShell source because the custom `cluster` and `gateway` images are built from it. That vendored source is for image builds, not for the user-facing CLI.
+
 ### Local Development
 
 If you are developing locally, build and publish all three images to a local registry first.
@@ -134,6 +142,16 @@ Then use:
 - `OPENERAL_SANDBOX_IMAGE=172.17.0.1:5000/openshell/openeral/sandbox:dev`
 
 The cluster image is pulled by host Docker, so `127.0.0.1:5000` is correct there. The cluster image itself is baked to resolve its sibling gateway image via `172.17.0.1:5000`, and the sandbox image is also pulled from inside the cluster, so use `172.17.0.1:5000` for the sandbox image reference and the registry host.
+
+## CI Contract
+
+The publish workflow builds the openeral `cluster`, `gateway`, and `sandbox` images from this repo, then validates them with the upstream released `openshell` CLI.
+
+That is intentional:
+
+- image builds come from the vendored OpenShell fork plus this repo
+- runtime control is exercised through the stock upstream `openshell` CLI
+- CI should not compile a vendored `openshell` CLI binary just to run smoke tests
 
 ## Start Gateway
 
