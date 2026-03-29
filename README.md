@@ -111,11 +111,28 @@ Current implementation details:
   not by a separate sidecar
 - non-package traffic still follows the normal OpenShell allow/deny path
 
+Cluster-scoped control knobs:
+
+- `OPENERAL_PACKAGE_PROXY_ENABLED`
+- `OPENERAL_PACKAGE_PROXY_PROFILE`
+- `OPENERAL_PACKAGE_PROXY_UPSTREAM_URL`
+- optional `OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`
+- optional `OPENERAL_PACKAGE_PROXY_AUTH_SECRET_NAME`
+
 For a real Socket Firewall Enterprise upstream, the sandbox also needs the
 package-proxy CA mounted into the pod so child processes trust Socket's MITM
 certificate. The gateway already supports that via
 `OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`, with a Kubernetes secret containing
 `ca.crt`.
+
+What was validated:
+
+- `npm view is-number version` succeeds from inside the sandbox and is observed
+  on the upstream proxy
+- `curl https://registry.npmjs.org/...` from the same sandbox is still denied by
+  normal OpenShell policy when the policy only allows npm/node
+- stopping the upstream proxy makes `npm view ...` fail with a proxy error
+  instead of silently falling back to direct egress
 
 Operational note:
 

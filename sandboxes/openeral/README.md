@@ -67,6 +67,20 @@ Socket proxy CA. The supported control-plane knob is
 `OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`, pointing at a Kubernetes secret with a
 `ca.crt` entry mounted into the sandbox pod.
 
+Cluster-scoped control knobs:
+
+- `OPENERAL_PACKAGE_PROXY_ENABLED`
+- `OPENERAL_PACKAGE_PROXY_PROFILE`
+- `OPENERAL_PACKAGE_PROXY_UPSTREAM_URL`
+- optional `OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`
+- optional `OPENERAL_PACKAGE_PROXY_AUTH_SECRET_NAME`
+
+The validated behavior is:
+
+- allowed `npm` traffic is chained through the upstream proxy
+- non-allowed binaries are still denied by normal OpenShell policy
+- if the upstream package proxy is down, package-manager requests fail closed
+
 Observed runtime caveat:
 
 - generic upstream proxy routing is validated end to end

@@ -50,6 +50,22 @@ For a real Socket upstream:
 Without those two pieces, Socket-specific package installs will fail even if the
 generic OpenShell proxy path is healthy.
 
+The practical validation pattern inside the sandbox is:
+
+```bash
+npm view is-number version
+curl -I -sS https://registry.npmjs.org/is-number
+```
+
+Expected behavior:
+
+- the `npm` command succeeds if policy allows it and the upstream package proxy
+  is healthy
+- the `curl` command should still be denied if policy only allows npm/node
+
+If you stop the upstream package proxy and rerun `npm view`, it should fail with
+an upstream proxy error. That is the expected fail-closed behavior.
+
 The supported Claude launch still remains:
 
 ```bash

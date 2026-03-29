@@ -83,6 +83,21 @@ exit until the account has Firewall Enterprise enabled. Socket also requires its
 CA to be mounted into the sandbox trust path via
 `OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`.
 
+When the Socket account is not entitled yet, use a generic HTTP proxy to
+validate the OpenShell side of the feature. That is enough to prove:
+
+- the sandbox proxy routes allowed package-manager traffic upstream
+- non-package binaries are still governed by normal OpenShell policy
+- the package-manager path fails closed when the upstream proxy is unavailable
+
+The most useful live check pair is:
+
+1. `npm view is-number version`
+   - should succeed
+   - should appear in the upstream proxy logs
+2. `curl -I https://registry.npmjs.org/is-number`
+   - should still be denied if the policy only allows npm/node
+
 ## Migration Contract
 
 `openeral` owns its PostgreSQL schema migrations.
