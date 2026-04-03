@@ -88,6 +88,35 @@ Observed runtime caveat:
   `socketdev/socket-firewall --service`; without it, the service exits before the
   OpenShell sandbox can use it
 
+## Boundary Secret Injection
+
+OpenEral also supports endpoint-scoped boundary secret injection inside the same
+built-in OpenShell sandbox proxy.
+
+- the child process sees placeholder values such as
+  `openshell:resolve:env:OPENAI_API_KEY`
+- the proxy rewrites those placeholders to real provider-env secrets only on
+  matching endpoints
+- v1 supports header and query-string rewriting on inspected REST traffic
+
+Required endpoint shape:
+
+- `protocol: rest`
+- `tls: terminate`
+- `secret_injection:` rules on the endpoint
+
+If an endpoint also uses `egress_via: package_proxy`:
+
+- non-secret requests still use the normal package-proxy route
+- secret-bearing requests switch to direct egress after rewrite
+- unauthorized or leaked placeholders are denied
+
+Migration note:
+
+- plain `HTTP_PROXY` forward-proxy requests no longer rewrite
+  `openshell:resolve:env:*` placeholders
+- placeholder-based auth must use the CONNECT + REST + TLS-terminate path
+
 ### Local Development
 
 If you are developing locally, build and publish all three images to a local registry first.

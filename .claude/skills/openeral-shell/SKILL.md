@@ -42,6 +42,24 @@ OpenShell sandbox proxy. Package-manager traffic may be chained through an
 upstream proxy, but normal OpenShell policy still decides whether the binary is
 allowed to reach the target at all.
 
+If the gateway enables boundary secret injection, the child process should still
+only see placeholder values such as `openshell:resolve:env:OPENAI_API_KEY`.
+Real secrets are only injected at egress by the built-in OpenShell sandbox
+proxy, and only on endpoints that declare:
+
+- `protocol: rest`
+- `tls: terminate`
+- `secret_injection`
+
+If such an endpoint also uses `egress_via: package_proxy`, then:
+
+- requests without placeholders follow the normal package-proxy route
+- requests with authorized placeholders are rewritten and sent direct to origin
+- unauthorized or leaked placeholders are denied
+
+Plain `HTTP_PROXY` requests are not the supported secret-injection path anymore.
+Use the CONNECT + REST + TLS-terminate path.
+
 For a real Socket upstream:
 
 - the Socket service account must actually have Firewall Enterprise enabled

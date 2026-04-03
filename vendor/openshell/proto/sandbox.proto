@@ -91,6 +91,23 @@ message NetworkEndpoint {
   // Optional routing profile metadata for the selected egress path.
   // For package proxy routing this can identify the backend, for example "socket".
   string egress_profile = 11;
+  // Optional boundary secret injection rules for REST endpoints.
+  repeated SecretInjectionRule secret_injection = 12;
+}
+
+// A boundary secret injection rule for an endpoint.
+message SecretInjectionRule {
+  // Provider env var holding the real secret value.
+  string env_var = 1;
+  // Optional placeholder token visible inside the sandbox. When empty, defaults
+  // to "openshell:resolve:env:<ENV_VAR>".
+  string proxy_value = 2;
+  // Optional header names to scan. Empty means all headers.
+  repeated string match_headers = 3;
+  // Whether to rewrite query parameters for this secret.
+  bool match_query = 4;
+  // Reserved for future request-body rewriting support.
+  bool match_body = 5;
 }
 
 // An L7 policy rule (allow-only).

@@ -9,9 +9,10 @@
 
 use crate::l7::provider::L7Provider;
 use crate::l7::{EnforcementMode, L7EndpointConfig, L7Protocol, L7RequestInfo};
-use crate::secrets::SecretResolver;
+use crate::proxy::RestRouteContext;
+use crate::secrets::ScopedSecretInjector;
 use miette::{IntoDiagnostic, Result, miette};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info, warn};
 
@@ -29,8 +30,10 @@ pub struct L7EvalContext {
     pub ancestors: Vec<String>,
     /// Cmdline paths.
     pub cmdline_paths: Vec<String>,
-    /// Supervisor-only placeholder resolver for outbound headers.
-    pub(crate) secret_resolver: Option<Arc<SecretResolver>>,
+    /// Request-scoped boundary secret injector for this endpoint.
+    pub(crate) scoped_secret_injector: Option<ScopedSecretInjector>,
+    /// Per-endpoint request router used to open the correct upstream per request.
+    pub(crate) route_context: RestRouteContext,
 }
 
 /// Run protocol-aware L7 inspection on a tunnel.
@@ -40,27 +43,25 @@ pub struct L7EvalContext {
 /// assumes the streams are already proven to carry the expected protocol.
 /// For TLS-terminated connections, ALPN proves HTTP; for plaintext, the
 /// caller peeks on the raw `TcpStream` before calling this.
-pub async fn relay_with_inspection<C, U>(
+pub async fn relay_with_inspection<C>(
     config: &L7EndpointConfig,
     engine: Mutex<regorus::Engine>,
     client: &mut C,
-    upstream: &mut U,
     ctx: &L7EvalContext,
 ) -> Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin + Send,
-    U: AsyncRead + AsyncWrite + Unpin + Send,
 {
     match config.protocol {
-        L7Protocol::Rest => relay_rest(config, &engine, client, upstream, ctx).await,
+        L7Protocol::Rest => relay_rest(config, &engine, client, ctx).await,
         L7Protocol::Sql => {
-            // SQL provider is Phase 3 — fall through to passthrough with warning
             warn!(
                 host = %ctx.host,
                 port = ctx.port,
                 "SQL L7 provider not yet implemented, falling back to passthrough"
             );
-            tokio::io::copy_bidirectional(client, upstream)
+            let mut upstream = ctx.route_context.connect_for_request(false).await?.stream;
+            tokio::io::copy_bidirectional(client, &mut upstream)
                 .await
                 .into_diagnostic()?;
             Ok(())
@@ -69,22 +70,19 @@ where
 }
 
 /// REST relay loop: parse request -> evaluate -> allow/deny -> relay response -> repeat.
-async fn relay_rest<C, U>(
+async fn relay_rest<C>(
     config: &L7EndpointConfig,
     engine: &Mutex<regorus::Engine>,
     client: &mut C,
-    upstream: &mut U,
     ctx: &L7EvalContext,
 ) -> Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin + Send,
-    U: AsyncRead + AsyncWrite + Unpin + Send,
 {
     loop {
-        // Parse one HTTP request from client
         let req = match crate::l7::rest::RestProvider.parse_request(client).await {
             Ok(Some(req)) => req,
-            Ok(None) => return Ok(()), // Client closed connection
+            Ok(None) => return Ok(()),
             Err(e) => {
                 if is_benign_connection_error(&e) {
                     debug!(
@@ -101,7 +99,7 @@ where
                         "HTTP parse error in L7 relay"
                     );
                 }
-                return Ok(()); // Close connection on parse error
+                return Ok(());
             }
         };
 
@@ -110,16 +108,81 @@ where
             target: req.target.clone(),
         };
 
-        // Evaluate L7 policy via Rego
         let (allowed, reason) = evaluate_l7_request(engine, ctx, &request_info)?;
-
         let decision_str = match (allowed, config.enforcement) {
             (true, _) => "allow",
             (false, EnforcementMode::Audit) => "audit",
             (false, EnforcementMode::Enforce) => "deny",
         };
 
-        // Log every L7 decision
+        if !allowed && config.enforcement == EnforcementMode::Enforce {
+            info!(
+                dst_host = %ctx.host,
+                dst_port = ctx.port,
+                policy = %ctx.policy_name,
+                l7_protocol = "rest",
+                l7_action = %request_info.action,
+                l7_target = %request_info.target,
+                l7_decision = decision_str,
+                l7_deny_reason = %reason,
+                secret_injection_action = "none",
+                secret_swaps = ?Vec::<crate::secrets::SecretSwap>::new(),
+                route_before = %ctx.route_context.normal_route_name(),
+                route_after = "-",
+                route_switch_reason = "none",
+                upstream_proxy = "-",
+                "L7_REQUEST",
+            );
+            crate::l7::rest::RestProvider
+                .deny(&req, &ctx.policy_name, &reason, client)
+                .await?;
+            return Ok(());
+        }
+
+        let prepared = match crate::l7::rest::prepare_http_request(
+            &req,
+            ctx.scoped_secret_injector.as_ref(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let deny_reason = error.to_string();
+                info!(
+                    dst_host = %ctx.host,
+                    dst_port = ctx.port,
+                    policy = %ctx.policy_name,
+                    l7_protocol = "rest",
+                    l7_action = %request_info.action,
+                    l7_target = %request_info.target,
+                    l7_decision = "deny",
+                    l7_deny_reason = %deny_reason,
+                    secret_injection_action = "denied",
+                    secret_swaps = ?Vec::<crate::secrets::SecretSwap>::new(),
+                    route_before = %ctx.route_context.normal_route_name(),
+                    route_after = "-",
+                    route_switch_reason = "none",
+                    upstream_proxy = "-",
+                    "L7_REQUEST",
+                );
+                crate::l7::rest::RestProvider
+                    .deny(&req, &ctx.policy_name, &deny_reason, client)
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        let route_before = ctx.route_context.normal_route_name();
+        let secret_applied = !prepared.swaps.is_empty();
+        let mut upstream = ctx
+            .route_context
+            .connect_for_request(secret_applied)
+            .await?;
+        let route_switch_reason = if route_before != upstream.route_name {
+            "placeholder_present"
+        } else {
+            "none"
+        };
+        let secret_injection_action = if secret_applied { "applied" } else { "none" };
+
         info!(
             dst_host = %ctx.host,
             dst_port = ctx.port,
@@ -129,41 +192,26 @@ where
             l7_target = %request_info.target,
             l7_decision = decision_str,
             l7_deny_reason = %reason,
+            secret_injection_action,
+            secret_swaps = ?prepared.swaps,
+            route_before,
+            route_after = %upstream.route_name,
+            route_switch_reason,
+            upstream_proxy = %upstream.upstream_proxy,
+            egress_profile = %upstream.egress_profile,
             "L7_REQUEST",
         );
 
-        if allowed || config.enforcement == EnforcementMode::Audit {
-            // Forward request to upstream and relay response
-            let reusable = crate::l7::rest::relay_http_request_with_resolver(
-                &req,
-                client,
-                upstream,
-                ctx.secret_resolver.as_deref(),
-            )
-            .await?;
-            if !reusable {
-                debug!(
-                    host = %ctx.host,
-                    port = ctx.port,
-                    "Upstream connection not reusable, closing L7 relay"
-                );
-                return Ok(());
-            }
-        } else {
-            // Enforce mode: deny with 403 and close connection
-            crate::l7::rest::RestProvider
-                .deny(&req, &ctx.policy_name, &reason, client)
-                .await?;
-            return Ok(());
-        }
+        let _ = crate::l7::rest::relay_http_request_with_prepared_request(
+            &req,
+            client,
+            &mut upstream.stream,
+            &prepared,
+        )
+        .await?;
     }
 }
 
-/// Check if a miette error represents a benign connection close.
-///
-/// TLS handshake EOF, missing `close_notify`, connection resets, and broken
-/// pipes are all normal lifecycle events for proxied connections — not worth
-/// a WARN that interrupts the user's terminal.
 fn is_benign_connection_error(err: &miette::Report) -> bool {
     const BENIGN: &[&str] = &[
         "close_notify",
@@ -177,9 +225,6 @@ fn is_benign_connection_error(err: &miette::Report) -> bool {
     BENIGN.iter().any(|pat| msg.contains(pat))
 }
 
-/// Evaluate an L7 request against the OPA engine.
-///
-/// Returns `(allowed, deny_reason)`.
 fn evaluate_l7_request(
     engine: &Mutex<regorus::Engine>,
     ctx: &L7EvalContext,

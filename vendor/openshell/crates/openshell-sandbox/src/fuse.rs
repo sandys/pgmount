@@ -352,7 +352,10 @@ mod tests {
 
     #[test]
     fn expand_source_placeholders_substitutes_environment_variables() {
-        let env = HashMap::from([("OPENSHELL_SANDBOX_ID".to_string(), "sandbox-123".to_string())]);
+        let env = HashMap::from([(
+            "OPENSHELL_SANDBOX_ID".to_string(),
+            "sandbox-123".to_string(),
+        )]);
         let source = "env#workspace#${OPENSHELL_SANDBOX_ID}";
 
         assert_eq!(

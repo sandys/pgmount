@@ -8,7 +8,7 @@
 //! and chunked transfer encoding for body framing.
 
 use crate::l7::provider::{BodyLength, L7Provider, L7Request};
-use crate::secrets::rewrite_http_header_block;
+use crate::secrets::{PreparedHttpRequest, ScopedSecretInjector, contains_placeholder_bytes};
 use miette::{IntoDiagnostic, Result, miette};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
@@ -123,14 +123,57 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
-    relay_http_request_with_resolver(req, client, upstream, None).await
+    let prepared = prepare_http_request(req, None)?;
+    relay_http_request_with_prepared_request(req, client, upstream, &prepared).await
 }
 
-pub(crate) async fn relay_http_request_with_resolver<C, U>(
+pub(crate) fn prepare_http_request(
+    req: &L7Request,
+    injector: Option<&ScopedSecretInjector>,
+) -> Result<PreparedHttpRequest> {
+    let header_end = req
+        .raw_header
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or(req.raw_header.len(), |p| p + 4);
+    let header = &req.raw_header[..header_end];
+
+    match injector {
+        Some(injector) => injector.rewrite_http_request(header),
+        None => {
+            if contains_placeholder_bytes(header) {
+                return Err(miette!(
+                    "request contains placeholder secrets outside an authorized injection path"
+                ));
+            }
+            Ok(PreparedHttpRequest {
+                bytes: header.to_vec(),
+                swaps: Vec::new(),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn relay_http_request_with_injector<C, U>(
     req: &L7Request,
     client: &mut C,
     upstream: &mut U,
-    resolver: Option<&crate::secrets::SecretResolver>,
+    injector: Option<&ScopedSecretInjector>,
+) -> Result<bool>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    let prepared = prepare_http_request(req, injector)?;
+    relay_http_request_with_prepared_request(req, client, upstream, &prepared).await
+}
+
+pub(crate) async fn relay_http_request_with_prepared_request<C, U>(
+    req: &L7Request,
+    client: &mut C,
+    upstream: &mut U,
+    prepared: &PreparedHttpRequest,
 ) -> Result<bool>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -142,10 +185,8 @@ where
         .position(|w| w == b"\r\n\r\n")
         .map_or(req.raw_header.len(), |p| p + 4);
 
-    let rewritten_header = rewrite_http_header_block(&req.raw_header[..header_end], resolver);
-
     upstream
-        .write_all(&rewritten_header)
+        .write_all(&prepared.bytes)
         .await
         .into_diagnostic()?;
 
@@ -591,7 +632,7 @@ fn is_benign_close(err: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::SecretResolver;
+    use crate::secrets::{SecretInjectionRule, SecretResolver};
 
     #[test]
     fn parse_content_length() {
@@ -981,22 +1022,40 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_header_block_resolves_placeholder_auth_headers() {
+    fn prepare_http_request_rewrites_headers_and_queries() {
         let (_, resolver) = SecretResolver::from_provider_env(
             [("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]
                 .into_iter()
                 .collect(),
         );
-        let raw = b"GET /v1/messages HTTP/1.1\r\nAuthorization: Bearer openshell:resolve:env:ANTHROPIC_API_KEY\r\nHost: example.com\r\n\r\n";
+        let injector = resolver
+            .as_ref()
+            .expect("resolver")
+            .scoped_injector(&[SecretInjectionRule {
+                env_var: "ANTHROPIC_API_KEY".to_string(),
+                proxy_value: String::new(),
+                match_headers: vec!["Authorization".to_string()],
+                match_query: true,
+                match_body: false,
+            }])
+            .expect("injector build")
+            .expect("injector");
+        let req = L7Request {
+            action: "GET".to_string(),
+            target: "/v1/messages?token=openshell%3Aresolve%3Aenv%3AANTHROPIC_API_KEY".to_string(),
+            raw_header: b"GET /v1/messages?token=openshell%3Aresolve%3Aenv%3AANTHROPIC_API_KEY HTTP/1.1\r\nAuthorization: Bearer openshell:resolve:env:ANTHROPIC_API_KEY\r\nHost: example.com\r\n\r\n".to_vec(),
+            body_length: BodyLength::None,
+        };
 
-        let rewritten = rewrite_http_header_block(raw, resolver.as_ref());
-        let rewritten = String::from_utf8(rewritten).expect("utf8");
+        let rewritten = prepare_http_request(&req, Some(&injector)).expect("prepared request");
+        let rewritten = String::from_utf8(rewritten.bytes).expect("utf8");
 
         assert!(rewritten.contains("Authorization: Bearer sk-test\r\n"));
+        assert!(rewritten.starts_with("GET /v1/messages?token=sk-test HTTP/1.1\r\n"));
         assert!(!rewritten.contains("openshell:resolve:env:ANTHROPIC_API_KEY"));
     }
 
-    /// Verifies that `relay_http_request_with_resolver` rewrites credential
+    /// Verifies that `relay_http_request_with_injector` rewrites credential
     /// placeholders in request headers before forwarding to upstream.
     ///
     /// This is the code path exercised when an endpoint has `protocol: rest`
@@ -1007,7 +1066,7 @@ mod tests {
     /// silently leaks placeholder strings like `openshell:resolve:env:NVIDIA_API_KEY`
     /// to the upstream API, causing 401 Unauthorized errors.
     #[tokio::test]
-    async fn relay_request_with_resolver_rewrites_credential_placeholders() {
+    async fn relay_request_with_injector_rewrites_credential_placeholders() {
         let provider_env: std::collections::HashMap<String, String> = [(
             "NVIDIA_API_KEY".to_string(),
             "nvapi-real-secret-key".to_string(),
@@ -1017,6 +1076,18 @@ mod tests {
 
         let (child_env, resolver) = SecretResolver::from_provider_env(provider_env);
         let placeholder = child_env.get("NVIDIA_API_KEY").unwrap();
+        let injector = resolver
+            .as_ref()
+            .expect("resolver")
+            .scoped_injector(&[SecretInjectionRule {
+                env_var: "NVIDIA_API_KEY".to_string(),
+                proxy_value: String::new(),
+                match_headers: vec!["Authorization".to_string()],
+                match_query: false,
+                match_body: false,
+            }])
+            .expect("injector build")
+            .expect("injector");
 
         let (mut proxy_to_upstream, mut upstream_side) = tokio::io::duplex(8192);
         let (mut _app_side, mut proxy_to_client) = tokio::io::duplex(8192);
@@ -1061,11 +1132,11 @@ mod tests {
         // Run the relay with a resolver — simulates the TLS-terminate path
         let relay = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            relay_http_request_with_resolver(
+            relay_http_request_with_injector(
                 &req,
                 &mut proxy_to_client,
                 &mut proxy_to_upstream,
-                resolver.as_ref(),
+                Some(&injector),
             ),
         )
         .await
@@ -1088,12 +1159,10 @@ mod tests {
         assert!(forwarded.contains("Host: integrate.api.nvidia.com\r\n"));
     }
 
-    /// Verifies that without a `SecretResolver` (i.e. the L4-only raw tunnel
-    /// path, or no TLS termination), credential placeholders pass through
-    /// unmodified. This documents the behavior that causes 401 errors when
-    /// `tls: terminate` is missing from the endpoint config.
+    /// Without an endpoint-scoped injector, placeholder-bearing requests are
+    /// denied instead of leaking secrets upstream.
     #[tokio::test]
-    async fn relay_request_without_resolver_leaks_placeholders() {
+    async fn relay_request_without_injector_rejects_placeholders() {
         let (child_env, _resolver) = SecretResolver::from_provider_env(
             [("NVIDIA_API_KEY".to_string(), "nvapi-secret".to_string())]
                 .into_iter()
@@ -1101,7 +1170,7 @@ mod tests {
         );
         let placeholder = child_env.get("NVIDIA_API_KEY").unwrap();
 
-        let (mut proxy_to_upstream, mut upstream_side) = tokio::io::duplex(8192);
+        let (mut proxy_to_upstream, _upstream_side) = tokio::io::duplex(8192);
         let (mut _app_side, mut proxy_to_client) = tokio::io::duplex(8192);
 
         let req = L7Request {
@@ -1117,55 +1186,14 @@ mod tests {
             body_length: BodyLength::ContentLength(2),
         };
 
-        let upstream_task = tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-            let mut total = 0;
-            loop {
-                let n = upstream_side.read(&mut buf[total..]).await.unwrap();
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if let Some(hdr_end) = buf[..total].windows(4).position(|w| w == b"\r\n\r\n") {
-                    if total >= hdr_end + 4 + 2 {
-                        break;
-                    }
-                }
-            }
-            upstream_side
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-                .await
-                .unwrap();
-            upstream_side.flush().await.unwrap();
-            String::from_utf8_lossy(&buf[..total]).to_string()
-        });
-
-        // Pass `None` for the resolver — simulates the L4 path where no
-        // rewriting occurs.
-        let relay = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            relay_http_request_with_resolver(
-                &req,
-                &mut proxy_to_client,
-                &mut proxy_to_upstream,
-                None, // <-- No resolver, as in the L4 raw tunnel path
-            ),
+        let error = relay_http_request_with_injector(
+            &req,
+            &mut proxy_to_client,
+            &mut proxy_to_upstream,
+            None,
         )
         .await
-        .expect("relay must not deadlock");
-        relay.expect("relay should succeed");
-
-        let forwarded = upstream_task.await.expect("upstream task should complete");
-
-        // Without a resolver, the placeholder LEAKS to upstream — this is the
-        // documented behavior that causes 401s when `tls: terminate` is missing.
-        assert!(
-            forwarded.contains("openshell:resolve:env:NVIDIA_API_KEY"),
-            "Expected placeholder to leak without resolver, got: {forwarded}"
-        );
-        assert!(
-            !forwarded.contains("nvapi-secret"),
-            "Real secret should NOT appear without resolver, got: {forwarded}"
-        );
+        .expect_err("placeholder should be rejected without injector");
+        assert!(error.to_string().contains("placeholder secrets"));
     }
 }

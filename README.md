@@ -14,6 +14,8 @@ Everything in this repo supports that flow.
 OpenEral also extends the OpenShell outbound proxy path so allowed package-manager
 traffic can be chained through an upstream package proxy. FUSE remains optional at
 the product level, but the current published sandbox still includes the FUSE path.
+It also supports boundary-level secret injection on inspected REST endpoints, so
+workloads can carry placeholder tokens instead of real credentials.
 
 One important constraint:
 
@@ -110,6 +112,62 @@ Current implementation details:
 - package-proxy routing is enforced inside the built-in OpenShell sandbox proxy,
   not by a separate sidecar
 - non-package traffic still follows the normal OpenShell allow/deny path
+
+### Boundary Secret Injection
+
+OpenEral also extends the same built-in OpenShell proxy/policy path with
+endpoint-scoped secret injection.
+
+- workloads see placeholder values like `openshell:resolve:env:OPENAI_API_KEY`
+- real secrets stay in provider env and are only redeemed inside the sandbox proxy
+- secret injection is controlled per endpoint through normal OpenShell
+  `network_policies`
+- v1 supports header and query-string rewriting on inspected REST traffic
+
+Required policy shape:
+
+- `protocol: rest`
+- `tls: terminate`
+- `secret_injection:` rules on the endpoint
+
+Routing behavior for an endpoint that has both `secret_injection` and
+`egress_via: package_proxy`:
+
+- requests without placeholders use the endpoint's normal route
+- requests with authorized placeholders are rewritten and sent direct to origin
+- requests with unauthorized or leaked placeholders are denied
+
+Important migration note:
+
+- plain `HTTP_PROXY` forward-proxy requests no longer get automatic placeholder
+  rewriting
+- placeholder-based auth must use the CONNECT + `protocol: rest` +
+  `tls: terminate` path
+
+Example policy shape:
+
+```yaml
+network_policies:
+  openai_api:
+    name: openai_api
+    endpoints:
+      - host: api.openai.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        egress_via: package_proxy
+        egress_profile: socket
+        rules:
+          - allow:
+              method: POST
+              path: /v1/**
+        secret_injection:
+          - env_var: OPENAI_API_KEY
+            match_headers: [Authorization]
+            match_query: true
+    binaries:
+      - path: /usr/bin/curl
+```
 
 Cluster-scoped control knobs:
 

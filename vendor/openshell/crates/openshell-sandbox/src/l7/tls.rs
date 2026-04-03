@@ -183,13 +183,16 @@ pub async fn tls_terminate_client(
 /// Connect TLS to an upstream server, verifying against webpki-roots.
 ///
 /// Returns a TLS stream for re-encrypted upstream communication.
-pub async fn tls_connect_upstream(
-    upstream: TcpStream,
-    hostname: &str,
-    client_config: &Arc<ClientConfig>,
-) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send> {
-    let connector = TlsConnector::from(Arc::clone(client_config));
-    let server_name = ServerName::try_from(hostname.to_string()).into_diagnostic()?;
+pub async fn tls_connect_upstream<S>(
+    upstream: S,
+    hostname: String,
+    client_config: Arc<ClientConfig>,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let connector = TlsConnector::from(client_config);
+    let server_name = ServerName::try_from(hostname).into_diagnostic()?;
     let tls_stream = connector
         .connect(server_name, upstream)
         .await

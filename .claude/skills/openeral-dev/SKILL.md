@@ -49,6 +49,10 @@ When validating the fresh-machine path with upstream `openshell 0.0.12`, include
   - sandbox pod generation and resource requests
 - `vendor/openshell/crates/openshell-sandbox/src/proxy.rs`
   - package-proxy routing inside the built-in OpenShell sandbox proxy
+- `vendor/openshell/crates/openshell-sandbox/src/secrets.rs`
+  - endpoint-scoped placeholder rewriting and post-rewrite leak detection
+- `vendor/openshell/crates/openshell-sandbox/src/l7/relay.rs`
+  - per-request routing for REST endpoints with secret injection
 - `vendor/openshell/crates/openshell-sandbox/src/child_env.rs`
   - child process proxy and CA trust environment
 - `vendor/openshell/deploy/helm/openshell/templates/statefulset.yaml`
@@ -76,6 +80,16 @@ If a change affects package-proxy routing, validate both:
 2. negative path:
    - non-allowed binaries are still denied by normal OpenShell policy
    - stopping the upstream proxy makes package-manager traffic fail closed
+
+If a change affects secret injection, validate all of these:
+
+1. the sandbox child only sees `openshell:resolve:env:*` placeholders
+2. an allowed REST endpoint with `protocol: rest`, `tls: terminate`, and
+   `secret_injection` rewrites placeholders successfully
+3. the upstream sees real credentials, not placeholders
+4. unauthorized placeholders are denied
+5. a request on the same endpoint without placeholders still uses the normal
+   route, including `package_proxy` when configured
 
 For real Socket validation, remember the upstream service itself is entitlement
 gated. Even with a valid API token, `socketdev/socket-firewall --service` will
@@ -129,6 +143,8 @@ These tests matter mainly because they protect the Claude persistence path.
 - keep the supported user flow to stock `openshell` commands, not wrapper scripts
 - keep CI aligned with that same path: upstream `openshell` CLI driving openeral images
 - treat cluster, gateway, and sandbox as one version-locked release set
+- plain `HTTP_PROXY` forward-proxy rewriting is no longer a supported secret
+  injection path; use REST + TLS-terminate policy instead
 
 ## Failure Triage
 

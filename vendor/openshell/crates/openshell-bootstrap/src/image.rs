@@ -370,8 +370,7 @@ mod tests {
 
     #[test]
     fn derive_repo_base_from_tagged_cluster_ref() {
-        let base =
-            derive_image_repo_base_from_cluster_ref("ghcr.io/acme/openeral/cluster:latest");
+        let base = derive_image_repo_base_from_cluster_ref("ghcr.io/acme/openeral/cluster:latest");
         assert_eq!(base.as_deref(), Some("ghcr.io/acme/openeral"));
     }
 
@@ -385,8 +384,7 @@ mod tests {
 
     #[test]
     fn derive_repo_base_rejects_non_cluster_ref() {
-        let base =
-            derive_image_repo_base_from_cluster_ref("ghcr.io/acme/openeral/sandbox:latest");
+        let base = derive_image_repo_base_from_cluster_ref("ghcr.io/acme/openeral/sandbox:latest");
         assert!(base.is_none());
     }
 
