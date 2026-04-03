@@ -138,18 +138,28 @@ The most useful live check pair is:
 
 Do not introduce a separate external migration tool for the supported product flow.
 
-## Local Rust Validation
+## Local Validation
 
-Use the Docker dev environment:
+Do not treat a repo-local docker compose stack as the primary development
+surface.
+
+The preferred validation order is:
+
+1. **OpenShell-first live validation**
 
 ```bash
-docker compose up -d
-docker compose exec dev cargo build
-docker compose exec dev cargo test -p openeral-core
-docker compose exec -e PGPASSWORD=pgmount dev bash tests/test_fuse_mount.sh
+tests/test_live_secret_injection.sh
 ```
 
-These tests matter mainly because they protect the Claude persistence path.
+2. **Direct lower-level checks when needed**
+
+```bash
+cargo test -p openeral-core
+bash tests/test_fuse_mount.sh
+```
+
+These lower-level checks are secondary. The product-level truth is still the
+OpenShell path.
 
 ## Development Heuristics
 
