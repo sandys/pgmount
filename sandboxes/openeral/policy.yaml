@@ -19,6 +19,7 @@ filesystem_policy:
     - /sandbox
     - /tmp
     - /dev/null
+    - /home/agent
 
 landlock:
   compatibility: best_effort

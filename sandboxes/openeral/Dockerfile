@@ -1,51 +1,39 @@
-# Stage 1: Build openeral from source
-FROM rust:1.85-bookworm AS builder
+# OpenEral sandbox — persistent /home/agent + read-only /db via just-bash
+#
+# Uses stock OpenShell (no custom cluster or gateway images needed).
+# All filesystem virtualization happens in userspace via openeral-js.
 
-RUN apt-get update && apt-get install -y \
-    libfuse3-dev \
-    fuse3 \
-    pkg-config \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
-
-RUN cargo build --release --bin openeral \
-    && strip /build/target/release/openeral
-
-# Stage 2: Runtime image extending the upstream OpenShell base sandbox
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 USER root
 
-# Install only runtime dependencies (no -dev packages)
+# Node.js runtime for openeral-js (just-bash)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fuse3 \
-    libpq5 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy openeral binary
-COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
+# Install openeral-js
+COPY openeral-js/ /opt/openeral/
+RUN cd /opt/openeral && npm install --omit=dev
 
-# Override the upstream base policy with the openeral sandbox policy so the
-# stock Claude path keeps working with placeholder credentials under boundary
-# secret injection.
+# openeral-bash: drop-in bash replacement routed through just-bash
+COPY sandboxes/openeral/openeral-bash.mjs /opt/openeral/openeral-bash.mjs
+RUN chmod +x /opt/openeral/openeral-bash.mjs \
+    && ln -sf /opt/openeral/openeral-bash.mjs /usr/local/bin/openeral-bash
+
+# Rename real bash so openeral-bash can fall back to it for interactive use
+RUN cp /bin/bash /bin/bash.real
+
+# Setup script (entry point for sandbox create)
+COPY sandboxes/openeral/setup.sh /opt/openeral/setup.sh
+RUN chmod +x /opt/openeral/setup.sh
+
+# Override the upstream base policy
 COPY sandboxes/openeral/policy.yaml /etc/openshell/policy.yaml
 
-# Allow non-root FUSE mounts
-RUN echo "user_allow_other" >> /etc/fuse.conf
-
-# Create mount points and declare supervisor-managed FUSE mounts.
-# OpenShell overrides the container command to run `openshell-sandbox`, which
-# reads `/etc/fstab` and mounts `fuse.*` entries marked `noauto` before
-# spawning the sandboxed child process.
-RUN mkdir -p /db /home/agent && \
-    printf '%s\n' \
-      'env /db fuse.openeral ro,allow_other,noauto 0 0' \
-      'env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0' \
-      >> /etc/fstab
-
-# Ship project-local skills into the sandbox home.
+# Skills for Claude Code
 COPY .claude/skills/ /sandbox/.skills/
+
+# Workspace directory (populated by WorkspaceFs via just-bash, not FUSE)
+RUN mkdir -p /home/agent

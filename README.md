@@ -181,14 +181,49 @@ The schema lives in `_openeral` and includes:
 - `workspace_files` — file content and metadata (primary persistence table)
 - `schema_version`, `mount_log`, `cache_hints` — operational tables
 
-## Legacy: FUSE Path
+## OpenShell Sandbox
 
-The `crates/` directory contains the original Rust + FUSE implementation. That
-path requires `/dev/fuse`, kernel modules, and privileged containers. It is
-retained for the OpenShell sandbox flow (`sandboxes/openeral/`) where the
-supervisor manages FUSE mounts via `/etc/fstab`.
+OpenEral works with **stock OpenShell** — no custom cluster or gateway images
+needed. Just build one sandbox image.
 
-For new integrations, prefer `openeral-js` — no kernel dependencies.
+### Launch Claude Code in OpenShell
+
+```bash
+# Stock upstream openshell
+openshell gateway start
+
+# Create a database provider
+openshell provider create \
+  --name db \
+  --type generic \
+  --credential DATABASE_URL
+
+# Launch Claude Code with persistent /home/agent + /db
+openshell sandbox create \
+  --from ghcr.io/<owner>/openeral/sandbox:latest \
+  --provider db \
+  --provider claude \
+  --auto-providers \
+  -- /opt/openeral/setup.sh
+```
+
+No `OPENSHELL_CLUSTER_IMAGE`, no `IMAGE_REPO_BASE`, no 3-image version lock.
+
+### How it works in the sandbox
+
+1. `setup.sh` runs migrations against `$DATABASE_URL` (injected by provider)
+2. Seeds the workspace (creates `/home/agent/.claude/` dirs)
+3. Starts the `openeral-bash` daemon (persistent just-bash shell on Unix socket)
+4. Launches Claude Code with `HOME=/home/agent SHELL=/usr/local/bin/openeral-bash`
+
+Claude Code's bash commands route through `openeral-bash` → daemon → just-bash →
+PostgreSQL. The agent sees `/db` and `/home/agent` as normal directories.
+
+### Build the sandbox image
+
+```bash
+docker build -f sandboxes/openeral/Dockerfile -t openeral/sandbox:latest .
+```
 
 ## Project Structure
 
@@ -198,11 +233,12 @@ For new integrations, prefer `openeral-js` — no kernel dependencies.
   - `src/db/` — SQL queries, migrations, connection pool
   - `src/safety.ts` — command safety analysis via just-bash parser
   - `src/shell.ts` — shell factory and agent tool handler
-- `crates/openeral/` — Rust CLI entry point (legacy FUSE path)
-- `crates/openeral-core/` — Rust library (FUSE filesystem, DB queries)
-- `crates/openeral-core/migrations/` — SQL migrations (V1-V4)
-- `sandboxes/openeral/` — OpenShell sandbox image (FUSE path)
-- `vendor/openshell/` — vendored OpenShell fork (custom cluster/gateway images)
+- `sandboxes/openeral/` — OpenShell sandbox image
+  - `Dockerfile` — stock base + Node.js + openeral-js
+  - `openeral-bash.mjs` — daemon/client bridge for Claude Code
+  - `setup.sh` — sandbox entry point
+  - `policy.yaml` — network policy (Claude API, GitHub, etc.)
+- `crates/` — legacy Rust + FUSE implementation (retained, not used in sandbox)
 - `tests/` — integration tests
 
 ## Compatibility
