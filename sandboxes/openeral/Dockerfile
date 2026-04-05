@@ -7,10 +7,11 @@ FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 USER root
 
-# Node.js runtime for openeral-js (just-bash)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    nodejs \
-    npm \
+# Node.js 22 LTS via NodeSource (apt nodejs conflicts with npm on Ubuntu Noble)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install openeral-js

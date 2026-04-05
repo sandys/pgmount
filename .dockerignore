@@ -10,3 +10,7 @@ sandboxes
 !sandboxes/openeral/
 !sandboxes/openeral/**
 vendor
+openeral-js/node_modules
+openeral-js/dist
+openeral-js/pnpm-lock.yaml
+openeral-js/package-lock.json
