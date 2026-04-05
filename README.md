@@ -1,61 +1,65 @@
 # OpenEral
 
-OpenEral gives AI agents a persistent home directory and read-only database
-access, backed by PostgreSQL. No kernel modules, no FUSE, no privileged
-containers.
+Persistent home directory and read-only database access for AI agents, backed by PostgreSQL. Works with stock [OpenShell](https://github.com/nvidia/openshell-community) — no custom cluster, no custom gateway, no FUSE, no kernel modules.
 
-The agent's only tool is `bash`. OpenEral replaces the real shell with
-[just-bash](https://github.com/vercel-labs/just-bash) — a TypeScript bash
-interpreter with a pluggable `IFileSystem` interface — and mounts two
-PostgreSQL-backed virtual filesystems:
+Built on [just-bash](https://github.com/vercel-labs/just-bash) (TypeScript bash interpreter with pluggable `IFileSystem`). The agent's bash tool routes through just-bash with two PostgreSQL-backed virtual mounts:
 
-- `/home/agent` — read-write persistent workspace (`_openeral.workspace_files`)
-- `/db` — read-only navigable view of the database (schemas, tables, rows)
-
-Every `cat`, `grep`, `ls`, `echo > file`, `python script.py` goes through
-just-bash. The agent sees a normal Linux filesystem. The reality is pure
-database.
+- `/home/agent` — read-write persistent workspace
+- `/db` — read-only navigable view of the database
 
 ## Quick Start
+
+### As a library
 
 ```typescript
 import { createOpeneralShell } from 'openeral-js'
 
 const shell = await createOpeneralShell({
   connectionString: process.env.DATABASE_URL,
-  workspaceId: 'my-agent-session',
+  workspaceId: 'my-session',
 })
 
-// Agent tool handler
-const result = await shell.exec('cat /db/public/users/.info/count')
-// → "42\n"
-
-await shell.exec('echo "hello" > /home/agent/notes.txt')
-await shell.exec('cat /home/agent/notes.txt')
-// → "hello\n"
+await shell.exec('cat /db/public/users/.info/count')   // → "42\n"
+await shell.exec('echo hello > /home/agent/notes.txt') // persisted to PostgreSQL
+await shell.exec('cat /home/agent/notes.txt')           // → "hello\n"
 ```
 
-Wire it as the agent's bash tool:
+### In OpenShell (stock, no fork)
+
+```bash
+openshell gateway start
+
+openshell provider create \
+  --name db --type generic --credential DATABASE_URL
+
+openshell sandbox create \
+  --from ghcr.io/<owner>/openeral/sandbox:latest \
+  --provider db --provider claude --auto-providers \
+  -- /opt/openeral/setup.sh
+```
+
+Claude Code starts with `HOME=/home/agent`. The `openeral-bash` daemon intercepts every `bash -c` call and routes it through just-bash + PostgreSQL.
+
+### As an agent tool
+
+```python
+TOOL = [{
+    "name": "bash",
+    "description": "Execute shell command",
+    "input_schema": {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    },
+}]
+```
 
 ```typescript
-const TOOL = [{
-  name: "bash",
-  description: "Execute shell command",
-  input_schema: {
-    type: "object",
-    properties: { command: { type: "string" } },
-    required: ["command"],
-  },
-}]
+import { createOpeneralShell, createToolHandler } from 'openeral-js'
 
-async function handleBashTool(command: string) {
-  const result = await shell.exec(command)
-  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
-}
+const shell = await createOpeneralShell({ connectionString, workspaceId })
+const handleBash = createToolHandler(shell)
 ```
-
-Works with Claude Code, OpenClaw, or any LLM agent framework that exposes a
-single bash tool.
 
 ## What the Agent Sees
 
@@ -63,190 +67,105 @@ single bash tool.
 /db/
   public/
     users/
-      .info/
-        columns.json          # column metadata
-        schema.sql            # CREATE TABLE DDL
-        count                 # exact row count
-        primary_key           # PK column names
-      .export/
-        data.json/page_1.json # paginated JSON export
-        data.csv/page_1.csv
-      .filter/status/active/  # filtered rows
-      .order/name/asc/        # sorted rows
-      .indexes/users_pkey     # index metadata
+      .info/columns.json, schema.sql, count, primary_key
+      .export/data.json/page_1.json, data.csv/, data.yaml/
+      .filter/<column>/<value>/          # filtered rows
+      .order/<column>/asc|desc/          # sorted rows
+      .indexes/<index_name>              # index metadata
       page_1/
-        1/
-          id                  # "1"
-          name                # "Alice"
-          row.json            # {"id": 1, "name": "Alice", ...}
-          row.csv
-          row.yaml
-        2/
-        ...
-      page_2/
-        ...
-  test_schema/
-    ...
+        1/id, name, row.json, row.csv    # row data as files
+      page_2/...
+  other_schema/...
 
 /home/agent/
-  .claude/
-    settings.json
-    projects/...
   .claude.json
-  work/
-    notes.txt
+  .claude/settings.json, projects/...
+  <anything the agent writes>
+
+/tmp/                                    # ephemeral, in-memory
 ```
 
-## Architecture
+## How It Works
 
 ```
-Agent ──bash tool──► just-bash (TypeScript)
-                        │
-                   MountableFs
-                   ├── /db          → PgFs (read-only, SQL queries)
-                   ├── /home/agent  → WorkspaceFs (read-write, workspace_files table)
-                   └── /tmp         → InMemoryFs (ephemeral)
+Agent ──bash tool──► openeral-bash ──► just-bash (TypeScript)
+                                          │
+                                     MountableFs
+                                     ├── /db         → PgFs (read-only SQL)
+                                     ├── /home/agent → WorkspaceFs (read-write PostgreSQL)
+                                     └── /tmp        → InMemoryFs
 ```
 
-### Two Filesystem Implementations
+**PgFs** parses paths into a `PgNode` discriminated union, dispatches to SQL queries, generates content on-the-fly. Schema metadata cached with configurable TTL.
 
-1. **PgFs** (`openeral-js/src/pg-fs/`) — read-only. Parses paths into a
-   `PgNode` discriminated union, dispatches to SQL queries. Content generated
-   on-the-fly from live database. Caches schema metadata with configurable TTL.
+**WorkspaceFs** does direct SQL CRUD against `_openeral.workspace_files`. Every write persists immediately — no buffering.
 
-2. **WorkspaceFs** (`openeral-js/src/workspace-fs/`) — read-write. Direct SQL
-   CRUD against `_openeral.workspace_files`. Persists every write to PostgreSQL
-   immediately. No write-back buffering needed — just-bash's `writeFile()`
-   delivers complete content in one call.
+**Command safety** uses just-bash's `parse()` to build ASTs and classify commands. Resolves through wrappers (`env`, `sudo`, `exec`), detects write redirections, knows which subcommands are safe.
 
-### Command Safety Layer
-
-Uses just-bash's `parse()` function to build ASTs and classify commands before
-execution. Walks the full parse tree including nested `$(...)`, resolves through
-wrappers (`env`, `sudo`, `exec`), detects write redirections, and knows which
-subcommands are safe (`git status` yes, `git push` no).
-
-### Custom Commands
-
-The `pg` command provides direct SQL access:
-
-```bash
-pg SELECT count(*) FROM public.users
-```
-
-## Configuration
-
-```typescript
-const shell = await createOpeneralShell({
-  connectionString: 'postgresql://...',
-  workspaceId: 'session-123',
-  pageSize: 1000,        // rows per page in /db (default: 1000)
-  cacheTtlMs: 30000,     // metadata cache TTL (default: 30s)
-  python: true,           // enable CPython WASM runtime
-  javascript: false,      // enable QuickJS runtime
-  migrate: true,          // auto-run DB migrations (default: true)
-  executionLimits: {      // override safety limits
-    maxCommandCount: 1000,
-    maxLoopIterations: 1000,
-    maxOutputSize: 1024 * 1024,
-  },
-  env: {                  // extra environment variables
-    CUSTOM_VAR: 'value',
-  },
-})
-```
-
-## Persistence Model
-
-Persistence is keyed to the `workspaceId`:
-
-- Same `workspaceId` across shell instances = same `/home/agent`
-- Different `workspaceId` = fresh `/home/agent`
-
-Files the agent typically persists:
-
-- `~/.claude.json`
-- `~/.claude/settings.json`
-- `~/.claude/projects/...`
-- Agent transcripts, plans, and local state
-
-All stored as rows in `_openeral.workspace_files`.
-
-## Database Migrations
-
-OpenEral auto-runs migrations on `createOpeneralShell()` (unless `migrate: false`).
-The schema lives in `_openeral` and includes:
-
-- `workspace_config` — workspace metadata
-- `workspace_files` — file content and metadata (primary persistence table)
-- `schema_version`, `mount_log`, `cache_hints` — operational tables
+**`pg` command** provides direct SQL: `pg "SELECT count(*) FROM public.users"`
 
 ## OpenShell Sandbox
 
-OpenEral works with **stock OpenShell** — no custom cluster or gateway images
-needed. Just build one sandbox image.
+The sandbox image uses stock OpenShell base. No custom cluster or gateway needed.
 
-### Launch Claude Code in OpenShell
-
-```bash
-# Stock upstream openshell
-openshell gateway start
-
-# Create a database provider
-openshell provider create \
-  --name db \
-  --type generic \
-  --credential DATABASE_URL
-
-# Launch Claude Code with persistent /home/agent + /db
-openshell sandbox create \
-  --from ghcr.io/<owner>/openeral/sandbox:latest \
-  --provider db \
-  --provider claude \
-  --auto-providers \
-  -- /opt/openeral/setup.sh
-```
-
-No `OPENSHELL_CLUSTER_IMAGE`, no `IMAGE_REPO_BASE`, no 3-image version lock.
-
-### How it works in the sandbox
-
-1. `setup.sh` runs migrations against `$DATABASE_URL` (injected by provider)
-2. Seeds the workspace (creates `/home/agent/.claude/` dirs)
-3. Starts the `openeral-bash` daemon (persistent just-bash shell on Unix socket)
+`setup.sh` (the sandbox entry point):
+1. Runs migrations against `$DATABASE_URL` (injected by OpenShell provider)
+2. Seeds the workspace
+3. Starts the `openeral-bash` daemon on a Unix socket
 4. Launches Claude Code with `HOME=/home/agent SHELL=/usr/local/bin/openeral-bash`
 
-Claude Code's bash commands route through `openeral-bash` → daemon → just-bash →
-PostgreSQL. The agent sees `/db` and `/home/agent` as normal directories.
+Build: `docker build -f sandboxes/openeral/Dockerfile -t openeral/sandbox:latest .`
 
-### Build the sandbox image
+The policy file (`sandboxes/openeral/policy.yaml`) authorizes Claude API traffic with boundary secret injection — the child process only sees placeholder credentials.
+
+## Persistence
+
+Keyed to `workspaceId` (defaults to `OPENSHELL_SANDBOX_ID` in the sandbox):
+
+- Same `workspaceId` = same `/home/agent` across sessions
+- Different `workspaceId` = fresh workspace
+
+Verified across 3 sessions: writes in session 1 survive through sessions 2 and 3. Deletes persist. Direct PostgreSQL query confirms rows in `_openeral.workspace_files`.
+
+## Build & Test
 
 ```bash
-docker build -f sandboxes/openeral/Dockerfile -t openeral/sandbox:latest .
+cd openeral-js
+pnpm install
+pnpm check                    # typecheck + lint + unit tests
+
+# Integration test (requires PostgreSQL)
+DATABASE_URL='...' node test-integration.mjs
+
+# E2E test (3-session persistence + Claude API)
+DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
 ```
 
 ## Project Structure
 
-- `openeral-js/` — TypeScript package (just-bash + PostgreSQL virtual filesystem)
-  - `src/pg-fs/` — read-only database filesystem (PgFs)
-  - `src/workspace-fs/` — read-write workspace filesystem (WorkspaceFs)
-  - `src/db/` — SQL queries, migrations, connection pool
-  - `src/safety.ts` — command safety analysis via just-bash parser
-  - `src/shell.ts` — shell factory and agent tool handler
-- `sandboxes/openeral/` — OpenShell sandbox image
-  - `Dockerfile` — stock base + Node.js + openeral-js
-  - `openeral-bash.mjs` — daemon/client bridge for Claude Code
-  - `setup.sh` — sandbox entry point
-  - `policy.yaml` — network policy (Claude API, GitHub, etc.)
-- `crates/` — legacy Rust + FUSE implementation (retained, not used in sandbox)
-- `tests/` — integration tests
+```
+openeral-js/                  # TypeScript package
+  src/
+    pg-fs/                    # PgFs: read-only /db filesystem
+      pg-fs.ts                # IFileSystem implementation
+      path-parser.ts          # parsePath() → PgNode
+    workspace-fs/             # WorkspaceFs: read-write /home/agent
+      workspace-fs.ts         # IFileSystem implementation
+    db/                       # PostgreSQL layer
+      queries.ts              # SQL queries (introspection, rows, stats, indexes)
+      workspace-queries.ts    # Workspace CRUD
+      migrations.ts           # V1-V4 schema migrations
+      pool.ts, types.ts
+    safety.ts                 # Command analysis via just-bash parse()
+    shell.ts                  # createOpeneralShell(), createToolHandler()
+    index.ts                  # Public API
+  lint.mjs                    # Structural lints (8 rules)
+  test-integration.mjs        # Live PostgreSQL tests
+  test-e2e-claude.mjs         # 3-session persistence + Claude API
 
-## Compatibility
-
-| Agent Framework | Works? | Notes |
-|---|---|---|
-| Claude Code (bash-only tool) | Yes | Complete replacement |
-| OpenClaw | Yes | Agent-facing shell |
-| OpenAI agents | Yes | Single bash tool |
-| Any LLM with bash tool | Yes | Framework-agnostic |
-| pi-coding-agent | Yes | Already uses just-bash parser |
+sandboxes/openeral/           # OpenShell sandbox image
+  Dockerfile                  # Stock base + Node.js + openeral-js
+  openeral-bash.mjs           # Daemon/client bridge for Claude Code
+  setup.sh                    # Entry point: migrate → seed → daemon → claude
+  policy.yaml                 # Network policy (Claude API, GitHub, PyPI, etc.)
+```

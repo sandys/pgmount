@@ -1,39 +1,39 @@
 ---
 name: openeral-navigate
-description: Use /db for read-only database context and /home/agent for persistent workspace via just-bash
+description: Explore /db and manage files in /home/agent — PostgreSQL-backed virtual filesystem via just-bash
 ---
 
 # OpenEral Navigate
 
-The agent's bash tool runs through just-bash with two PostgreSQL-backed mounts:
+Two mounts, both backed by PostgreSQL:
 
+- `/db` — read-only database (schemas, tables, rows as files)
 - `/home/agent` — read-write persistent workspace
-- `/db` — read-only database view
 
-## Database Reads
+## /db — Database Exploration
 
 ```bash
-ls /db                                          # list schemas
-ls /db/public                                   # list tables
+ls /db                                          # schemas
+ls /db/public                                   # tables
 cat /db/public/users/.info/columns.json         # column metadata
 cat /db/public/users/.info/schema.sql           # CREATE TABLE DDL
-cat /db/public/users/.info/count                # exact row count
+cat /db/public/users/.info/count                # row count
 cat /db/public/users/.info/primary_key          # PK columns
-cat /db/public/users/page_1/1/row.json          # single row as JSON
+cat /db/public/users/page_1/1/row.json          # row as JSON
 cat /db/public/users/page_1/1/name              # single column value
 grep -r "Alice" /db/public/users/               # search rows
-ls /db/public/users/.filter/status/active/      # filtered rows
+ls /db/public/users/.filter/status/active/      # filtered by column value
 ls /db/public/users/.order/created_at/desc/     # sorted rows
 ls /db/public/users/.indexes/                   # index metadata
-ls /db/public/users/.export/data.json/          # paginated export
-pg SELECT count(*) FROM public.users            # direct SQL
+ls /db/public/users/.export/data.json/          # paginated JSON export
+pg "SELECT count(*) FROM public.users"          # direct SQL (quote complex queries)
 ```
 
-Prefer `.filter/` for targeted lookups — cheapest path for database inspection.
+Prefer `.filter/` and `.info/count` over scanning page trees.
 
-## Workspace
+## /home/agent — Workspace
 
-Any files the agent should keep must go under `/home/agent`:
+Writes persist to PostgreSQL immediately:
 
 ```bash
 mkdir -p /home/agent/work
@@ -41,10 +41,10 @@ echo "notes" > /home/agent/work/todo.txt
 cat /home/agent/work/todo.txt
 ```
 
-Persistence is automatic — every write goes to PostgreSQL immediately.
+Persists across sessions (same workspaceId = same files).
 
-## What Not To Do
+## Rules
 
-- Do not write to `/db` (read-only, throws EROFS)
-- Do not assume `/tmp` is durable (ephemeral in-memory)
-- Do not scan huge tables when `.filter/` or `.info/count` answers the question
+- `/db` is read-only — writes throw EROFS
+- `/tmp` is ephemeral (in-memory, lost between sessions)
+- `$HOME` is `/home/agent`
