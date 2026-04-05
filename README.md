@@ -72,7 +72,7 @@ openshell provider create \
   --name db --type generic --credential DATABASE_URL
 
 openshell sandbox create \
-  --from ghcr.io/<owner>/openeral/sandbox:latest \
+  --from ghcr.io/sandys/openeral/sandbox:just-bash \
   --provider db --provider claude --auto-providers \
   -- /opt/openeral/setup.sh
 ```
