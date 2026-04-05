@@ -28,6 +28,9 @@ export { WorkspaceFs } from './workspace-fs/workspace-fs.js';
 export { parsePath, isDirectory, parsePkDisplay } from './pg-fs/path-parser.js';
 export type { PgNode } from './pg-fs/path-parser.js';
 
+// Filesystem sync (PostgreSQL ↔ real filesystem)
+export { syncToFs, syncFromFs, watchAndSync } from './sync.js';
+
 // Database utilities
 export { createPool } from './db/pool.js';
 export { runMigrations } from './db/migrations.js';
