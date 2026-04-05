@@ -1,6 +1,6 @@
 ---
 name: openeral-dev
-description: Develop and verify the openeral OpenShell flow whose goal is a working Claude Code with persistent /home/agent
+description: Develop openeral-js — the just-bash + PostgreSQL virtual filesystem for AI agents
 disable-model-invocation: false
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash
@@ -9,180 +9,73 @@ argument-hint: [task description]
 
 # OpenEral Development
 
-The product goal is not “generic database browsing.”
-
 The product goal is:
 
-- OpenShell starts a sandbox
-- `openeral` mounts `/home/agent` and `/db`
-- Claude Code runs with `HOME=/home/agent`
-- `.claude` persists to PostgreSQL
+- an AI agent has a single `bash` tool
+- that tool runs through just-bash with PostgreSQL-backed virtual mounts
+- `/home/agent` persists agent state across sessions
+- `/db` gives read-only database access
+- no kernel modules, no FUSE, no privileged containers
 
-When developing this repo, optimize for that end-to-end flow first.
+## Two Paths
 
-The supported runtime is a coupled 3-image set:
+1. **openeral-js** (primary) — TypeScript + just-bash. All new work goes here.
+2. **crates/ + sandboxes/** (legacy) — Rust + FUSE. Retained for OpenShell sandbox flow.
 
-- `cluster`
-  - owns the patched supervisor and bundled manifests
-- `gateway`
-  - owns sandbox pod spec generation and FUSE device requests
-- `sandbox`
-  - owns `openeral`, `fuse3`, and `/etc/fstab`
+Both share the same `_openeral` database schema and SQL migrations.
 
-Do not assume any mixed upstream/openeral image combination is valid.
+## Files That Matter
 
-The supported CLI is still the upstream released `openshell` binary. The vendored OpenShell tree is kept to build the custom `cluster` and `gateway` images, not to provide a separate CLI path.
+### openeral-js (primary)
 
-When validating the fresh-machine path with upstream `openshell 0.0.12`, include `IMAGE_REPO_BASE=<openeral repo base>` alongside `OPENSHELL_CLUSTER_IMAGE`. Without that override, the CLI still points the internal gateway pull at upstream OpenShell.
+- `openeral-js/src/pg-fs/pg-fs.ts` — PgFs IFileSystem (read-only database mount)
+- `openeral-js/src/pg-fs/path-parser.ts` — path → PgNode discriminated union
+- `openeral-js/src/workspace-fs/workspace-fs.ts` — WorkspaceFs IFileSystem (read-write)
+- `openeral-js/src/db/queries.ts` — all SQL queries (ported from Rust)
+- `openeral-js/src/db/workspace-queries.ts` — workspace CRUD queries
+- `openeral-js/src/db/migrations.ts` — V1-V4 migrations
+- `openeral-js/src/safety.ts` — command safety via just-bash parse() AST
+- `openeral-js/src/shell.ts` — createOpeneralShell() factory
 
-## Files That Matter Most
+### Legacy FUSE (reference)
 
-- `crates/openeral-core/src/fs/workspace.rs`
-  - writable workspace persistence
-- `crates/openeral-core/src/db/queries/workspace.rs`
-  - database storage for workspace files
-- `sandboxes/openeral/Dockerfile`
-  - published sandbox image
-- `sandboxes/openeral/policy.yaml`
-  - authoritative sandbox policy copied to `/etc/openshell/policy.yaml`
-- `vendor/openshell/crates/openshell-sandbox/src/fuse.rs`
-  - supervisor-side FUSE startup from `/etc/fstab`
-- `vendor/openshell/crates/openshell-server/src/sandbox/mod.rs`
-  - sandbox pod generation and resource requests
-- `vendor/openshell/crates/openshell-sandbox/src/proxy.rs`
-  - package-proxy routing inside the built-in OpenShell sandbox proxy
-- `vendor/openshell/crates/openshell-sandbox/src/secrets.rs`
-  - endpoint-scoped placeholder rewriting and post-rewrite leak detection
-- `vendor/openshell/crates/openshell-sandbox/src/l7/relay.rs`
-  - per-request routing for REST endpoints with secret injection
-- `vendor/openshell/crates/openshell-sandbox/src/child_env.rs`
-  - child process proxy and CA trust environment
-- `vendor/openshell/deploy/helm/openshell/templates/statefulset.yaml`
-  - gateway deployment wiring
+- `crates/openeral-core/src/fs/inode.rs` — NodeIdentity enum (blueprint for PgNode)
+- `crates/openeral-core/src/fs/nodes/` — content generation per node type
+- `crates/openeral-core/src/db/queries/` — original SQL queries (Rust)
 
-## Primary Verification Loop
-
-The most important validation is an end-to-end OpenShell run where:
-
-1. a fresh host starts a gateway with the custom cluster image
-2. a generic OpenShell provider is created for the live PostgreSQL database
-3. the sandbox uses the published openeral image
-4. the sandbox starts with `/db` and `/home/agent`
-5. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'` succeeds
-6. PostgreSQL contains the resulting `/.claude*` rows in `_openeral.workspace_files`
-7. the child env still shows `ANTHROPIC_API_KEY` as the placeholder value
-8. a separate `curl` request to `GET /v1/models` succeeds using that same
-   placeholder env through the secret-injection path
-
-If a change affects the OpenShell path, rerun the full flow from scratch.
-
-In CI and release smoke, use the upstream OpenShell installer/release path for the CLI. Do not add vendored `openshell-cli` builds just to run smoke.
-
-If a change affects package-proxy routing, validate both:
-
-1. positive path:
-   - allowed package-manager traffic reaches the upstream proxy
-2. negative path:
-   - non-allowed binaries are still denied by normal OpenShell policy
-   - stopping the upstream proxy makes package-manager traffic fail closed
-
-If a change affects secret injection, validate all of these:
-
-1. the sandbox child only sees `openshell:resolve:env:*` placeholders
-2. an allowed REST endpoint with `protocol: rest`, `tls: terminate`, and
-   `secret_injection` rewrites placeholders successfully
-3. the upstream sees real credentials, not placeholders
-4. unauthorized placeholders are denied
-5. a request on the same endpoint without placeholders still uses the normal
-   route, including `package_proxy` when configured
-6. for the Anthropic Claude path specifically, the sandbox policy copied to
-   `/etc/openshell/policy.yaml` still contains the expected `secret_injection`
-   rule on the `claude_code` endpoint
-
-Current live-proven Anthropic checks:
-
-1. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'`
-2. `curl -fsS https://api.anthropic.com/v1/models -H "x-api-key: $ANTHROPIC_API_KEY" -H 'anthropic-version: 2023-06-01'`
-
-Both should run while the child-visible env still shows
-`openshell:resolve:env:ANTHROPIC_API_KEY`.
-
-For real Socket validation, remember the upstream service itself is entitlement
-gated. Even with a valid API token, `socketdev/socket-firewall --service` will
-exit until the account has Firewall Enterprise enabled. Socket also requires its
-CA to be mounted into the sandbox trust path via
-`OPENERAL_PACKAGE_PROXY_CA_SECRET_NAME`.
-
-When the Socket account is not entitled yet, use a generic HTTP proxy to
-validate the OpenShell side of the feature. That is enough to prove:
-
-- the sandbox proxy routes allowed package-manager traffic upstream
-- non-package binaries are still governed by normal OpenShell policy
-- the package-manager path fails closed when the upstream proxy is unavailable
-
-The most useful live check pair is:
-
-1. `npm view is-number version`
-   - should succeed
-   - should appear in the upstream proxy logs
-2. `curl -I https://registry.npmjs.org/is-number`
-   - should still be denied if the policy only allows npm/node
-
-## Migration Contract
-
-`openeral` owns its PostgreSQL schema migrations.
-
-- binary or image upgrades are expected to auto-run pending migrations on first mount
-- mounts must fail closed if migrations cannot be applied
-- `openeral migrate` is the explicit admin/preflight command when you have direct binary access
-
-Do not introduce a separate external migration tool for the supported product flow.
-
-## Local Validation
-
-Do not treat a repo-local docker compose stack as the primary development
-surface.
-
-The preferred validation order is:
-
-1. **OpenShell-first live validation**
+## Verification
 
 ```bash
-tests/test_live_secret_injection.sh
+# TypeScript path
+cd openeral-js && pnpm typecheck && pnpm test
+
+# Path parser tests (no DB needed)
+pnpm test -- src/pg-fs/path-parser.test.ts
+
+# Safety analysis tests (no DB needed)
+pnpm test -- src/safety.test.ts
+
+# Integration test (requires PostgreSQL)
+# const shell = await createOpeneralShell({ connectionString, workspaceId })
+# shell.exec('ls /db') → lists schemas
+# shell.exec('cat /db/public/users/.info/count') → row count
+# shell.exec('echo hello > /home/agent/test.txt && cat /home/agent/test.txt') → "hello"
 ```
-
-2. **Direct lower-level checks when needed**
-
-```bash
-cargo test -p openeral-core
-bash tests/test_fuse_mount.sh
-```
-
-These lower-level checks are secondary. The product-level truth is still the
-OpenShell path.
 
 ## Development Heuristics
 
-- prefer fixes that preserve `HOME=/home/agent` semantics
-- treat workspace ownership bugs as high severity
-- treat `/dev/fuse` or `/etc/fstab` regressions as product blockers
-- treat sandbox-policy regressions in `sandboxes/openeral/policy.yaml` as
-  product blockers when they break the stock Claude path
-- keep the supported user flow to stock `openshell` commands, not wrapper scripts
-- keep CI aligned with that same path: upstream `openshell` CLI driving openeral images
-- treat cluster, gateway, and sandbox as one version-locked release set
-- plain `HTTP_PROXY` forward-proxy rewriting is no longer a supported secret
-  injection path; use REST + TLS-terminate policy instead
+- PgFs is read-only: all write methods throw EROFS
+- WorkspaceFs delivers complete content per writeFile() — no buffering
+- Path parsing replaces FUSE inodes: `parsePath()` → PgNode, not inode tables
+- SQL queries from Rust transfer verbatim (quoteIdent + $N params + ::text casts)
+- Command safety follows the pi-coding-agent pattern: AST walk + regex fallback
+- The Supabase docs shell is the reference for MountableFs + customCommands + executionLimits + defenseInDepth
+- just-bash's Python WASM runtime routes open() through IFileSystem (agent subagents see virtual FS)
 
-## Failure Triage
+## Migration Contract
 
-- Claude auth failure:
-  - credential/billing problem, or a sandbox-policy regression on the Anthropic path
-- `/home/agent` missing or not writable:
-  - workspace mount failure
-- `/db` missing:
-  - database mount failure
-- Claude runs but state disappears:
-  - wrong `HOME` or workspace persistence bug
+`openeral-js` auto-runs migrations via `runMigrations()` in `createOpeneralShell()`.
+The schema is `_openeral` with tables: `workspace_config`, `workspace_files`,
+`schema_version`, `mount_log`, `cache_hints`.
 
-Always debug from the end-user product flow backward.
+Migrations must be idempotent (IF NOT EXISTS).

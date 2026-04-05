@@ -1,57 +1,50 @@
 ---
 name: openeral-navigate
-description: Use /db for read-only database context while keeping Claude state under /home/agent
+description: Use /db for read-only database context and /home/agent for persistent workspace via just-bash
 ---
 
 # OpenEral Navigate
 
-This skill is for the database side of the Claude Code sandbox.
+The agent's bash tool runs through just-bash with two PostgreSQL-backed mounts:
 
-The priority order is:
+- `/home/agent` — read-write persistent workspace
+- `/db` — read-only database view
 
-1. keep Claude running with `HOME=/home/agent`
-2. use `/db` only when Claude needs live database context
-
-## First Checks
+## Database Reads
 
 ```bash
-grep -E ' /db | /home/agent ' /proc/mounts
+ls /db                                          # list schemas
+ls /db/public                                   # list tables
+cat /db/public/users/.info/columns.json         # column metadata
+cat /db/public/users/.info/schema.sql           # CREATE TABLE DDL
+cat /db/public/users/.info/count                # exact row count
+cat /db/public/users/.info/primary_key          # PK columns
+cat /db/public/users/page_1/1/row.json          # single row as JSON
+cat /db/public/users/page_1/1/name              # single column value
+grep -r "Alice" /db/public/users/               # search rows
+ls /db/public/users/.filter/status/active/      # filtered rows
+ls /db/public/users/.order/created_at/desc/     # sorted rows
+ls /db/public/users/.indexes/                   # index metadata
+ls /db/public/users/.export/data.json/          # paginated export
+pg SELECT count(*) FROM public.users            # direct SQL
 ```
 
-If either mount is missing, stop treating it as a data-navigation problem. It is an infrastructure problem.
+Prefer `.filter/` for targeted lookups — cheapest path for database inspection.
 
-## Fast Database Reads
+## Workspace
 
-Use `/db` like this:
-
-```bash
-ls /db
-ls /db/public
-cat /db/public/users/.info/columns.json
-cat /db/public/users/.info/count
-cat /db/public/users/.filter/id/42/42/row.json
-ls /db/public/users/.order/created_at/desc/
-```
-
-Use `.filter/` for targeted lookups. It is the cheapest path for Claude-driven database inspection.
-
-## Workspace Rule
-
-Any notes, scripts, or generated files that Claude should keep must go under `/home/agent`.
+Any files the agent should keep must go under `/home/agent`:
 
 ```bash
 mkdir -p /home/agent/work
-printf 'notes\n' > /home/agent/work/todo.txt
+echo "notes" > /home/agent/work/todo.txt
+cat /home/agent/work/todo.txt
 ```
 
-If a tool stores state under `$HOME`, run it with:
-
-```bash
-HOME=/home/agent <tool>
-```
+Persistence is automatic — every write goes to PostgreSQL immediately.
 
 ## What Not To Do
 
-- do not write to `/db`
-- do not assume `/sandbox` is durable
-- do not scan huge tables blindly when `.filter/` or `.info/count` will answer the question
+- Do not write to `/db` (read-only, throws EROFS)
+- Do not assume `/tmp` is durable (ephemeral in-memory)
+- Do not scan huge tables when `.filter/` or `.info/count` answers the question

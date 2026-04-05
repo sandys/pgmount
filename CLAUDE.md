@@ -1,67 +1,71 @@
 # CLAUDE.md
 
-For **using** openeral without developing it, see `sandboxes/openeral/README.md`.
+For **using** openeral without developing it, see the README.
 
 ## Build & Test
 
-**Do not use a repo-local docker compose dev stack.** This repo is centered on
-the stock upstream `openshell` CLI plus the openeral `cluster`, `gateway`, and
-`sandbox` images.
-
 ```bash
-# Primary end-to-end validation
+# openeral-js (primary path — TypeScript + just-bash)
+cd openeral-js && pnpm install && pnpm typecheck && pnpm test
+
+# Legacy FUSE path (Rust)
+cargo test -p openeral-core
+bash tests/test_fuse_mount.sh
+
+# OpenShell end-to-end (requires running cluster)
 tests/test_live_secret_injection.sh
 ```
 
-That harness is the primary verification surface because it exercises the real
-OpenShell runtime:
-
-- stock `openshell`
-- openeral `cluster` / `gateway` / `sandbox` images
-- `/home/agent` persistence through `openeral`
-- Anthropic boundary secret injection
-
-If you need lower-level checks in addition to the OpenShell run, prefer direct,
-repo-local commands over a compose wrapper:
-
-```bash
-cargo test -p openeral-core
-bash tests/test_fuse_mount.sh
-```
-
-But the OpenShell validation harness is the product-level truth.
-
 ## Project Structure
 
-- `crates/openeral/` — binary crate (thin CLI entry point)
-- `crates/openeral-core/` — library crate (all logic: FUSE filesystem, DB queries, CLI commands)
-- `crates/openeral-core/migrations/` — SQL migrations (V1–V4), managed by refinery
-- `sandboxes/openeral/` — current OpenShell sandbox image (upstream base sandbox, supervisor-managed via `/etc/fstab`)
-- `vendor/openshell/` — vendored OpenShell fork used to build the custom cluster and gateway images
-- `.github/workflows/publish-images.yml` — atomically publishes `openeral/{cluster,gateway,sandbox}`
-- `tests/test_fuse_mount.sh` — FUSE mount integration tests (bash)
-- `tests/test_live_secret_injection.sh` — OpenShell-first live validation harness for Claude + secret injection
+- `openeral-js/` — **primary implementation** (TypeScript, just-bash + PostgreSQL)
+  - `src/pg-fs/` — PgFs: read-only IFileSystem backed by SQL queries
+  - `src/workspace-fs/` — WorkspaceFs: read-write IFileSystem backed by workspace_files
+  - `src/db/` — SQL queries (ported from Rust), migrations, pool
+  - `src/safety.ts` — command safety analysis via just-bash parse() AST
+  - `src/shell.ts` — createOpeneralShell() factory, createToolHandler()
+  - `src/index.ts` — public API
+- `crates/openeral/` — legacy Rust CLI (FUSE path)
+- `crates/openeral-core/` — legacy Rust library (FUSE filesystem, DB queries)
+- `crates/openeral-core/migrations/` — SQL migrations (V1-V4), shared by both paths
+- `sandboxes/openeral/` — OpenShell sandbox image (uses legacy FUSE path)
+- `vendor/openshell/` — vendored OpenShell fork for custom cluster/gateway images
+- `tests/` — integration tests
 
-## Two Filesystems
+## Two Paths
 
-1. **PgmountFilesystem** (`fs/mod.rs`) — read-only mount of database content. Uses `NodeIdentity` enum for inode mapping.
-2. **WorkspaceFilesystem** (`fs/workspace.rs`) — read-write mount for agent state. Uses path-based inode table. Files stored in `_openeral.workspace_files`.
+1. **openeral-js** (preferred) — TypeScript + just-bash. No kernel deps. The
+   agent's bash tool routes through just-bash with PostgreSQL-backed virtual
+   mounts. Runs in Node.js, serverless, or browser.
 
-## Conventions
+2. **crates/ + sandboxes/** (legacy) — Rust + FUSE. Requires `/dev/fuse`, kernel
+   modules, privileged containers. Used in the OpenShell sandbox flow where the
+   supervisor manages FUSE mounts via `/etc/fstab`.
+
+Both paths share the same SQL queries and `_openeral` database schema.
+
+## openeral-js Conventions
+
+- IFileSystem implementations are path-based (no inodes)
+- `parsePath()` returns a `PgNode` discriminated union — the TypeScript equivalent of the Rust `NodeIdentity` enum
+- SQL queries use `quoteIdent()` for identifiers and `$N` params for values
+- All column values cast to `::text` in SQL
+- Read-only filesystem (PgFs) throws EROFS on write methods
+- WorkspaceFs receives complete file content per writeFile() call — no write-back buffering
+- Command safety uses just-bash's parse() for AST analysis with regex fallback
+
+## Legacy FUSE Conventions
 
 - All FUSE callbacks bridge sync→async via `rt.block_on()`
-- SQL queries use `quote_ident()` for identifiers and parameterized queries for values
-- All column values cast to `::text` in SQL to avoid Rust type-mapping issues
 - Errors map to `FsError` which converts to `fuser::Errno`
-- New node types: add to `NodeIdentity` enum, create handler in `fs/nodes/`, wire into dispatch functions
+- New node types: add to `NodeIdentity` enum, create handler in `fs/nodes/`, wire into dispatch
 
 ## Hard Rules
 
-- **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
-- **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom `openeral/cluster` image plus the published `openeral/sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
-- **Do not reintroduce a repo-local compose-centric workflow.** If a test or instruction can be expressed against the real OpenShell flow, prefer that over maintaining a parallel docker compose path.
-- **Never delete, move, or overwrite user files without explicit permission.** This includes files that appear sensitive, secret-bearing, incorrect, or security-critical.
-- **If a file appears risky, stop and ask first.** Report the concern clearly, but do not remove, rewrite, chmod, or hide the file on your own.
+- **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch.
+- **Do not reintroduce a repo-local compose-centric workflow.**
+- **Never delete, move, or overwrite user files without explicit permission.**
+- **If a file appears risky, stop and ask first.**
 
 ## Commit Style
 
