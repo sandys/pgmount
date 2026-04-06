@@ -43,12 +43,18 @@ When validating the fresh-machine path with upstream `openshell 0.0.12`, include
   - database storage for workspace files
 - `sandboxes/openeral/Dockerfile`
   - published sandbox image
+- `sandboxes/openeral/policy.yaml`
+  - authoritative sandbox policy copied to `/etc/openshell/policy.yaml`
 - `vendor/openshell/crates/openshell-sandbox/src/fuse.rs`
   - supervisor-side FUSE startup from `/etc/fstab`
 - `vendor/openshell/crates/openshell-server/src/sandbox/mod.rs`
   - sandbox pod generation and resource requests
 - `vendor/openshell/crates/openshell-sandbox/src/proxy.rs`
   - package-proxy routing inside the built-in OpenShell sandbox proxy
+- `vendor/openshell/crates/openshell-sandbox/src/secrets.rs`
+  - endpoint-scoped placeholder rewriting and post-rewrite leak detection
+- `vendor/openshell/crates/openshell-sandbox/src/l7/relay.rs`
+  - per-request routing for REST endpoints with secret injection
 - `vendor/openshell/crates/openshell-sandbox/src/child_env.rs`
   - child process proxy and CA trust environment
 - `vendor/openshell/deploy/helm/openshell/templates/statefulset.yaml`
@@ -64,6 +70,9 @@ The most important validation is an end-to-end OpenShell run where:
 4. the sandbox starts with `/db` and `/home/agent`
 5. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'` succeeds
 6. PostgreSQL contains the resulting `/.claude*` rows in `_openeral.workspace_files`
+7. the child env still shows `ANTHROPIC_API_KEY` as the placeholder value
+8. a separate `curl` request to `GET /v1/models` succeeds using that same
+   placeholder env through the secret-injection path
 
 If a change affects the OpenShell path, rerun the full flow from scratch.
 
@@ -76,6 +85,27 @@ If a change affects package-proxy routing, validate both:
 2. negative path:
    - non-allowed binaries are still denied by normal OpenShell policy
    - stopping the upstream proxy makes package-manager traffic fail closed
+
+If a change affects secret injection, validate all of these:
+
+1. the sandbox child only sees `openshell:resolve:env:*` placeholders
+2. an allowed REST endpoint with `protocol: rest`, `tls: terminate`, and
+   `secret_injection` rewrites placeholders successfully
+3. the upstream sees real credentials, not placeholders
+4. unauthorized placeholders are denied
+5. a request on the same endpoint without placeholders still uses the normal
+   route, including `package_proxy` when configured
+6. for the Anthropic Claude path specifically, the sandbox policy copied to
+   `/etc/openshell/policy.yaml` still contains the expected `secret_injection`
+   rule on the `claude_code` endpoint
+
+Current live-proven Anthropic checks:
+
+1. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'`
+2. `curl -fsS https://api.anthropic.com/v1/models -H "x-api-key: $ANTHROPIC_API_KEY" -H 'anthropic-version: 2023-06-01'`
+
+Both should run while the child-visible env still shows
+`openshell:resolve:env:ANTHROPIC_API_KEY`.
 
 For real Socket validation, remember the upstream service itself is entitlement
 gated. Even with a valid API token, `socketdev/socket-firewall --service` will
@@ -126,14 +156,18 @@ These tests matter mainly because they protect the Claude persistence path.
 - prefer fixes that preserve `HOME=/home/agent` semantics
 - treat workspace ownership bugs as high severity
 - treat `/dev/fuse` or `/etc/fstab` regressions as product blockers
+- treat sandbox-policy regressions in `sandboxes/openeral/policy.yaml` as
+  product blockers when they break the stock Claude path
 - keep the supported user flow to stock `openshell` commands, not wrapper scripts
 - keep CI aligned with that same path: upstream `openshell` CLI driving openeral images
 - treat cluster, gateway, and sandbox as one version-locked release set
+- plain `HTTP_PROXY` forward-proxy rewriting is no longer a supported secret
+  injection path; use REST + TLS-terminate policy instead
 
 ## Failure Triage
 
 - Claude auth failure:
-  - credential or billing problem
+  - credential/billing problem, or a sandbox-policy regression on the Anthropic path
 - `/home/agent` missing or not writable:
   - workspace mount failure
 - `/db` missing:

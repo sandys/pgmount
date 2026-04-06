@@ -2561,8 +2561,16 @@ mod tests {
         let mounts = pod_template["spec"]["containers"][0]["volumeMounts"]
             .as_array()
             .expect("volume mounts should exist");
-        assert!(mounts.iter().any(|mount| mount["name"] == PACKAGE_PROXY_CA_VOLUME_NAME));
-        assert!(mounts.iter().any(|mount| mount["name"] == PACKAGE_PROXY_AUTH_VOLUME_NAME));
+        assert!(
+            mounts
+                .iter()
+                .any(|mount| mount["name"] == PACKAGE_PROXY_CA_VOLUME_NAME)
+        );
+        assert!(
+            mounts
+                .iter()
+                .any(|mount| mount["name"] == PACKAGE_PROXY_AUTH_VOLUME_NAME)
+        );
 
         let volumes = pod_template["spec"]["volumes"]
             .as_array()
@@ -2582,7 +2590,10 @@ mod tests {
     #[test]
     fn package_proxy_defaults_do_not_override_existing_env() {
         let mut template_environment = std::collections::HashMap::new();
-        template_environment.insert("OPENERAL_PACKAGE_PROXY_ENABLED".to_string(), "0".to_string());
+        template_environment.insert(
+            "OPENERAL_PACKAGE_PROXY_ENABLED".to_string(),
+            "0".to_string(),
+        );
         template_environment.insert(
             "OPENERAL_PACKAGE_PROXY_UPSTREAM_URL".to_string(),
             "http://custom-proxy:8080".to_string(),

@@ -1,4 +1,5 @@
 pub mod fuse_fd;
+pub mod launch;
 pub mod list;
 pub mod migrate;
 pub mod mount;
@@ -35,6 +36,8 @@ pub enum Commands {
     Version,
     /// Manage workspaces (create, mount, seed, list, delete)
     Workspace(workspace::WorkspaceArgs),
+    /// Launch OpenEral: gateway + providers + sandbox in one command
+    Launch(launch::LaunchArgs),
 }
 
 pub async fn run() -> Result<(), FsError> {
@@ -49,6 +52,7 @@ pub async fn run() -> Result<(), FsError> {
             Ok(())
         }
         Commands::Workspace(args) => workspace::execute(args).await,
+        Commands::Launch(args) => launch::execute(args).await,
     }
 }
 

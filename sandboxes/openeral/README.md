@@ -88,6 +88,63 @@ Observed runtime caveat:
   `socketdev/socket-firewall --service`; without it, the service exits before the
   OpenShell sandbox can use it
 
+## Quick Start (One Command)
+
+Set three environment variables, then run a single command:
+
+```bash
+export DATABASE_URL='host=<host> user=<user> password=<password> dbname=<dbname>'
+export ANTHROPIC_API_KEY='<your-anthropic-api-key>'
+export STRINGCOST_API_KEY='<your-stringcost-api-key>'   # optional, enables cost tracking
+
+openeral launch --image <sandbox-image-ref>
+```
+
+That's it. `openeral launch` handles gateway startup, provider creation,
+StringCost presigning, and sandbox launch automatically.
+
+If `STRINGCOST_API_KEY` is set, all Anthropic traffic is routed through
+StringCost for cost tracking. If it's not set, Claude talks directly to
+Anthropic. Claude picks its own model — no override needed.
+
+### Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--image` | `$OPENERAL_SANDBOX_IMAGE` | Sandbox image reference (required) |
+| `--gateway` | `openeral` | Gateway name |
+| `--name` | `openeral-sandbox` | Sandbox name |
+| `--no-stringcost` | off | Skip StringCost even if key is set |
+| `--dry-run` | off | Print commands without executing |
+
+### Preview Mode
+
+See exactly what will run before committing:
+
+```bash
+openeral launch --image <sandbox-image-ref> --dry-run
+```
+
+## Optional StringCost Integration
+
+OpenEral can route all Anthropic API traffic through
+[StringCost](https://github.com/arakoodev/stringcost) for automatic cost
+tracking, billing, and usage metering.
+
+No wrapper scripts, no profile hooks, no inference routing config. `openeral
+launch` handles everything automatically when `STRINGCOST_API_KEY` is set.
+Claude picks its own model — no override.
+
+### How It Works
+
+1. `openeral launch` presigns the Anthropic key via StringCost
+2. Passes the presigned URL as `ANTHROPIC_BASE_URL` to the sandbox
+3. Claude Code sends API requests to StringCost with a placeholder `x-api-key`
+4. The OpenShell proxy rewrites the placeholder header to the real key
+5. StringCost receives the real key, proxies to Anthropic with cost tracking
+
+The sandbox image includes a network policy allowing `proxy.stringcost.com:443`.
+
 ### Local Development
 
 If you are developing locally, build and publish all three images to a local registry first.

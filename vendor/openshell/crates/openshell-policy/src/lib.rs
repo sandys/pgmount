@@ -16,7 +16,7 @@ use std::path::Path;
 use miette::{IntoDiagnostic, Result, WrapErr};
 use openshell_core::proto::{
     FilesystemPolicy, L7Allow, L7Rule, LandlockPolicy, NetworkBinary, NetworkEndpoint,
-    NetworkPolicyRule, ProcessPolicy, SandboxPolicy,
+    NetworkPolicyRule, ProcessPolicy, SandboxPolicy, SecretInjectionRule,
 };
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +103,8 @@ struct NetworkEndpointDef {
     egress_via: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     egress_profile: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    secret_injection: Vec<SecretInjectionRuleDef>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -134,6 +136,21 @@ struct NetworkBinaryDef {
     #[serde(default, skip_serializing)]
     #[allow(dead_code)]
     harness: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretInjectionRuleDef {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    env_var: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    proxy_value: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    match_headers: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    match_query: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    match_body: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +203,17 @@ fn to_proto(raw: PolicyFile) -> SandboxPolicy {
                             allowed_ips: e.allowed_ips,
                             egress_via: e.egress_via,
                             egress_profile: e.egress_profile,
+                            secret_injection: e
+                                .secret_injection
+                                .into_iter()
+                                .map(|rule| SecretInjectionRule {
+                                    env_var: rule.env_var,
+                                    proxy_value: rule.proxy_value,
+                                    match_headers: rule.match_headers,
+                                    match_query: rule.match_query,
+                                    match_body: rule.match_body,
+                                })
+                                .collect(),
                         }
                     })
                     .collect(),
@@ -288,6 +316,17 @@ fn from_proto(policy: &SandboxPolicy) -> PolicyFile {
                             allowed_ips: e.allowed_ips.clone(),
                             egress_via: e.egress_via.clone(),
                             egress_profile: e.egress_profile.clone(),
+                            secret_injection: e
+                                .secret_injection
+                                .iter()
+                                .map(|rule| SecretInjectionRuleDef {
+                                    env_var: rule.env_var.clone(),
+                                    proxy_value: rule.proxy_value.clone(),
+                                    match_headers: rule.match_headers.clone(),
+                                    match_query: rule.match_query,
+                                    match_body: rule.match_body,
+                                })
+                                .collect(),
                         }
                     })
                     .collect(),
@@ -684,6 +723,46 @@ network_policies:
         assert_eq!(ep1.egress_profile, "socket");
         assert_eq!(ep1.egress_via, ep2.egress_via);
         assert_eq!(ep1.egress_profile, ep2.egress_profile);
+    }
+
+    #[test]
+    fn round_trip_preserves_secret_injection_rules() {
+        let yaml = r#"
+version: 1
+network_policies:
+  api:
+    name: api
+    endpoints:
+      - host: api.example.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        rules:
+          - allow:
+              method: GET
+              path: /v1/**
+        secret_injection:
+          - env_var: OPENAI_API_KEY
+            match_headers:
+              - Authorization
+            match_query: true
+    binaries:
+      - path: /usr/bin/curl
+"#;
+        let proto1 = parse_sandbox_policy(yaml).expect("parse failed");
+        let yaml_out = serialize_sandbox_policy(&proto1).expect("serialize failed");
+        let proto2 = parse_sandbox_policy(&yaml_out).expect("re-parse failed");
+
+        let rule1 = &proto1.network_policies["api"].endpoints[0].secret_injection[0];
+        let rule2 = &proto2.network_policies["api"].endpoints[0].secret_injection[0];
+        assert_eq!(rule1.env_var, "OPENAI_API_KEY");
+        assert_eq!(rule1.match_headers, vec!["Authorization"]);
+        assert!(rule1.match_query);
+        assert_eq!(rule1.env_var, rule2.env_var);
+        assert_eq!(rule1.proxy_value, rule2.proxy_value);
+        assert_eq!(rule1.match_headers, rule2.match_headers);
+        assert_eq!(rule1.match_query, rule2.match_query);
+        assert_eq!(rule1.match_body, rule2.match_body);
     }
 
     /// Verify that the network policy `name` field survives the round-trip.

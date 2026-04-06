@@ -66,7 +66,7 @@ openeral/
   sandboxes/
     openeral/                        # OpenShell sandbox for AI agents
       Dockerfile                    # Multi-stage: build openeral + extend upstream base sandbox
-      policy.yaml                   # Landlock filesystem + capability policy
+      policy.yaml                   # Full sandbox runtime policy copied to /etc/openshell/policy.yaml
       README.md                     # Published-image OpenShell flow and sandbox behavior
       skills/openeral-navigate/     # Agent skill for /db navigation
   tests/
@@ -152,6 +152,43 @@ _openeral.workspace_files (
 
 ## Key Design Decisions
 
+### Sandbox policy is owned by this repo
+
+The openeral sandbox image does not depend on the upstream base policy staying
+compatible with openeral's placeholder-based auth model.
+
+At image build time:
+
+- `sandboxes/openeral/policy.yaml` is copied into `/etc/openshell/policy.yaml`
+- the supervisor inside the sandbox reads that file as the authoritative policy
+
+This matters because the current sandbox has to satisfy two constraints at the
+same time:
+
+1. child processes must only see placeholder provider env values such as
+   `openshell:resolve:env:ANTHROPIC_API_KEY`
+2. the built-in OpenShell proxy must still allow live Claude Code traffic and
+   selected direct verification traffic by rewriting those placeholders at
+   egress
+
+The policy currently includes:
+
+- `claude_code`
+  - allows Claude traffic to `api.anthropic.com`
+  - uses REST + TLS termination
+  - rewrites `ANTHROPIC_API_KEY` into the outbound `x-api-key` header
+- `anthropic_secret_test`
+  - allows `/usr/bin/curl`
+  - restricts the live verification path to `GET /v1/models`
+  - uses the same header-based secret-injection mechanism
+
+This is a deliberate tradeoff:
+
+- **pro**: the published sandbox image is self-contained and carries the exact
+  policy needed for the live-tested Claude path
+- **con**: policy drift from future upstream base-image changes must be managed
+  explicitly in this repo
+
 ### Pagination
 Rows are grouped into `page_N/` directories to bound memory usage and directory listing size. Each page contains up to `page_size` rows (default 1000). Export files are similarly paginated. Use `.filter/` for targeted access without browsing pages.
 
@@ -181,6 +218,26 @@ Configured via `--statement-timeout` (default 30s). Set at the PostgreSQL connec
 
 ### Migrations
 Managed by `refinery` (`embed_migrations!` macro). SQL files in `crates/openeral-core/migrations/`. Run automatically before FUSE mount; skip with `--skip-migrations`.
+
+## Live Validation Reference
+
+The current architecture was live-validated with the stock upstream
+`openshell` CLI and the openeral images.
+
+The reference proof included all of the following in one flow:
+
+1. sandbox child env exposed only the placeholder value
+   `openshell:resolve:env:ANTHROPIC_API_KEY`
+2. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'` succeeded
+3. `/home/agent` persisted `.claude*` rows into `_openeral.workspace_files`
+4. a separate `curl` call to `GET /v1/models` succeeded under the same
+   placeholder env using the policy-controlled secret-injection path
+
+So the currently intended architecture is not just theoretical:
+
+- FUSE-backed `/home/agent` persistence is live
+- stock Claude Code works against the current sandbox policy
+- boundary secret injection works on the Anthropic path that was validated
 
 ## Filesystem Layout (Read-Only Mount)
 

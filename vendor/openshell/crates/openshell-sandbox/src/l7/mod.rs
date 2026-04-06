@@ -145,6 +145,11 @@ pub fn validate_l7_policies(data_json: &serde_json::Value) -> (Vec<String>, Vec<
                 .get("rules")
                 .and_then(|v| v.as_array())
                 .is_some_and(|a| !a.is_empty());
+            let secret_injection = ep
+                .get("secret_injection")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             let host = ep.get("host").and_then(|v| v.as_str()).unwrap_or("");
 
             // Read ports from either "ports" array or scalar "port".
@@ -207,6 +212,29 @@ pub fn validate_l7_policies(data_json: &serde_json::Value) -> (Vec<String>, Vec<
                 errors.push(format!(
                     "{loc}: protocol requires rules or access to define allowed traffic"
                 ));
+            }
+
+            if !secret_injection.is_empty() {
+                if protocol != "rest" {
+                    errors.push(format!("{loc}: secret_injection requires `protocol: rest`"));
+                }
+                if tls != "terminate" {
+                    errors.push(format!("{loc}: secret_injection requires `tls: terminate`"));
+                }
+                for (rule_idx, rule) in secret_injection.iter().enumerate() {
+                    let rule_loc = format!("{loc}.secret_injection[{rule_idx}]");
+                    let env_var = rule.get("env_var").and_then(|v| v.as_str()).unwrap_or("");
+                    if env_var.is_empty() {
+                        errors.push(format!("{rule_loc}: env_var is required"));
+                    }
+                    if rule
+                        .get("match_body")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        errors.push(format!("{rule_loc}: match_body is not supported in v1"));
+                    }
+                }
             }
 
             // tls: terminate requires protocol
@@ -454,6 +482,92 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.contains("TLS termination requires"))
+        );
+    }
+
+    #[test]
+    fn validate_secret_injection_requires_rest() {
+        let data = serde_json::json!({
+            "network_policies": {
+                "test": {
+                    "endpoints": [{
+                        "host": "api.example.com",
+                        "port": 443,
+                        "protocol": "sql",
+                        "tls": "terminate",
+                        "rules": [{"allow": {"command": "SELECT"}}],
+                        "secret_injection": [{
+                            "env_var": "API_KEY",
+                            "match_headers": ["Authorization"]
+                        }]
+                    }],
+                    "binaries": []
+                }
+            }
+        });
+
+        let (errors, _warnings) = validate_l7_policies(&data);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("secret_injection requires `protocol: rest`"))
+        );
+    }
+
+    #[test]
+    fn validate_secret_injection_requires_tls_terminate() {
+        let data = serde_json::json!({
+            "network_policies": {
+                "test": {
+                    "endpoints": [{
+                        "host": "api.example.com",
+                        "port": 443,
+                        "protocol": "rest",
+                        "rules": [{"allow": {"method": "GET", "path": "/v1/**"}}],
+                        "secret_injection": [{
+                            "env_var": "API_KEY",
+                            "match_headers": ["Authorization"]
+                        }]
+                    }],
+                    "binaries": []
+                }
+            }
+        });
+
+        let (errors, _warnings) = validate_l7_policies(&data);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("secret_injection requires `tls: terminate`"))
+        );
+    }
+
+    #[test]
+    fn validate_secret_injection_rejects_match_body_in_v1() {
+        let data = serde_json::json!({
+            "network_policies": {
+                "test": {
+                    "endpoints": [{
+                        "host": "api.example.com",
+                        "port": 443,
+                        "protocol": "rest",
+                        "tls": "terminate",
+                        "rules": [{"allow": {"method": "POST", "path": "/v1/**"}}],
+                        "secret_injection": [{
+                            "env_var": "API_KEY",
+                            "match_body": true
+                        }]
+                    }],
+                    "binaries": []
+                }
+            }
+        });
+
+        let (errors, _warnings) = validate_l7_policies(&data);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("match_body is not supported in v1"))
         );
     }
 

@@ -5,12 +5,10 @@
 
 use crate::denial_aggregator::DenialEvent;
 use crate::identity::BinaryIdentityCache;
-use crate::l7::tls::{
-    ProxyTlsState, build_upstream_client_config_with_extra_certs,
-};
+use crate::l7::tls::{ProxyTlsState, build_upstream_client_config_with_extra_certs};
 use crate::opa::{NetworkAction, OpaEngine};
 use crate::policy::ProxyPolicy;
-use crate::secrets::{SecretResolver, rewrite_header_line};
+use crate::secrets::{SecretInjectionRule, SecretResolver, contains_placeholder_bytes};
 use miette::{IntoDiagnostic, Result};
 use rustls::pki_types::ServerName;
 use std::net::{IpAddr, SocketAddr};
@@ -33,11 +31,11 @@ const PACKAGE_PROXY_UPSTREAM_URL_ENV: &str = "OPENERAL_PACKAGE_PROXY_UPSTREAM_UR
 const PACKAGE_PROXY_CA_FILE_ENV: &str = "OPENERAL_PACKAGE_PROXY_CA_FILE";
 const PACKAGE_PROXY_AUTHORIZATION_FILE_ENV: &str = "OPENERAL_PACKAGE_PROXY_AUTHORIZATION_FILE";
 
-trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(crate) trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
-type BoxedStream = Box<dyn AsyncStream>;
+pub(crate) type BoxedStream = Box<dyn AsyncStream>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointEgressVia {
@@ -51,6 +49,7 @@ struct EndpointSettings {
     l7_config: Option<crate::l7::L7EndpointConfig>,
     egress_via: EndpointEgressVia,
     egress_profile: Option<String>,
+    secret_injection: Vec<SecretInjectionRule>,
 }
 
 impl Default for EndpointSettings {
@@ -60,7 +59,126 @@ impl Default for EndpointSettings {
             l7_config: None,
             egress_via: EndpointEgressVia::Direct,
             egress_profile: None,
+            secret_injection: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum RestNormalRoute {
+    Direct,
+    PackageProxy {
+        profile: String,
+        upstream_proxy: String,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct RestRouteContext {
+    host: String,
+    port: u16,
+    tls_mode: crate::l7::TlsMode,
+    resolved_addrs: Vec<SocketAddr>,
+    normal_route: RestNormalRoute,
+    package_proxy: Option<PackageProxyConfig>,
+    tls_state: Option<Arc<ProxyTlsState>>,
+}
+
+pub(crate) struct RestUpstreamConnection {
+    pub stream: BoxedStream,
+    pub route_name: &'static str,
+    pub egress_profile: String,
+    pub upstream_proxy: String,
+}
+
+impl RestRouteContext {
+    pub(crate) fn normal_route_name(&self) -> &'static str {
+        match self.normal_route {
+            RestNormalRoute::Direct => "direct",
+            RestNormalRoute::PackageProxy { .. } => "package_proxy",
+        }
+    }
+
+    pub(crate) fn normal_egress_profile(&self) -> &str {
+        match &self.normal_route {
+            RestNormalRoute::Direct => "-",
+            RestNormalRoute::PackageProxy { profile, .. } => profile.as_str(),
+        }
+    }
+
+    pub(crate) fn normal_upstream_proxy(&self) -> &str {
+        match &self.normal_route {
+            RestNormalRoute::Direct => "-",
+            RestNormalRoute::PackageProxy { upstream_proxy, .. } => upstream_proxy.as_str(),
+        }
+    }
+
+    pub(crate) async fn connect_for_request(
+        &self,
+        force_direct: bool,
+    ) -> Result<RestUpstreamConnection> {
+        let use_direct = force_direct || matches!(self.normal_route, RestNormalRoute::Direct);
+
+        if use_direct {
+            let tcp = TcpStream::connect(self.resolved_addrs.as_slice())
+                .await
+                .into_diagnostic()?;
+            let stream: BoxedStream = if self.tls_mode == crate::l7::TlsMode::Terminate {
+                let tls_state = self.tls_state.as_ref().ok_or_else(|| {
+                    miette::miette!("TLS termination requested but TLS state is not configured")
+                })?;
+                let tls_stream = crate::l7::tls::tls_connect_upstream(
+                    tcp,
+                    self.host.clone(),
+                    Arc::clone(tls_state.upstream_config()),
+                )
+                .await?;
+                Box::new(tls_stream)
+            } else {
+                Box::new(tcp)
+            };
+            return Ok(RestUpstreamConnection {
+                stream,
+                route_name: "direct",
+                egress_profile: "-".to_string(),
+                upstream_proxy: "-".to_string(),
+            });
+        }
+
+        let (profile, upstream_proxy) = match &self.normal_route {
+            RestNormalRoute::PackageProxy {
+                profile,
+                upstream_proxy,
+            } => (profile.clone(), upstream_proxy.clone()),
+            RestNormalRoute::Direct => unreachable!("direct routes are handled above"),
+        };
+        let package_proxy = self.package_proxy.as_ref().ok_or_else(|| {
+            miette::miette!(
+                "package proxy route requested but sandbox package proxy is not configured"
+            )
+        })?;
+        let upstream = connect_via_package_proxy(package_proxy, &self.host, self.port).await?;
+        let stream: BoxedStream = if self.tls_mode == crate::l7::TlsMode::Terminate {
+            let tls_state = self.tls_state.as_ref().ok_or_else(|| {
+                miette::miette!("TLS termination requested but TLS state is not configured")
+            })?;
+            let tls_stream = crate::l7::tls::tls_connect_upstream(
+                upstream,
+                self.host.clone(),
+                Arc::clone(tls_state.upstream_config()),
+            )
+            .await?;
+            Box::new(tls_stream)
+        } else {
+            upstream
+        };
+
+        Ok(RestUpstreamConnection {
+            stream,
+            route_name: "package_proxy",
+            egress_profile: profile,
+            upstream_proxy,
+        })
     }
 }
 
@@ -90,8 +208,9 @@ impl PackageProxyConfig {
 
         let upstream_url = std::env::var(PACKAGE_PROXY_UPSTREAM_URL_ENV)
             .map_err(|_| miette::miette!("{PACKAGE_PROXY_UPSTREAM_URL_ENV} is required"))?;
-        let parsed = Url::parse(&upstream_url)
-            .map_err(|error| miette::miette!("invalid package proxy URL {upstream_url}: {error}"))?;
+        let parsed = Url::parse(&upstream_url).map_err(|error| {
+            miette::miette!("invalid package proxy URL {upstream_url}: {error}")
+        })?;
         if !parsed.username().is_empty() || parsed.password().is_some() {
             return Err(miette::miette!(
                 "package proxy URL credentials are not supported; use {PACKAGE_PROXY_AUTHORIZATION_FILE_ENV}"
@@ -135,7 +254,9 @@ impl PackageProxyConfig {
         };
 
         let upstream_tls_config = if matches!(scheme, PackageProxyScheme::Https) {
-            Some(build_upstream_client_config_with_extra_certs(&extra_ca_paths)?)
+            Some(build_upstream_client_config_with_extra_certs(
+                &extra_ca_paths,
+            )?)
         } else {
             None
         };
@@ -223,7 +344,10 @@ fn should_route_via_package_proxy(
     package_proxy: Option<&PackageProxyConfig>,
     decision: &ConnectDecision,
 ) -> bool {
-    if matches!(endpoint_settings.egress_via, EndpointEgressVia::PackageProxy) {
+    if matches!(
+        endpoint_settings.egress_via,
+        EndpointEgressVia::PackageProxy
+    ) {
         return true;
     }
     if package_proxy.is_none() {
@@ -242,7 +366,13 @@ fn should_route_via_package_proxy(
 fn env_var_enabled(name: &str) -> bool {
     matches!(
         std::env::var(name).ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES") | Some("on") | Some("ON")
+        Some("1")
+            | Some("true")
+            | Some("TRUE")
+            | Some("yes")
+            | Some("YES")
+            | Some("on")
+            | Some("ON")
     )
 }
 
@@ -346,7 +476,7 @@ impl ProxyHandle {
     /// The proxy uses OPA for network decisions with process-identity binding
     /// via `/proc/net/tcp`. All connections are evaluated through OPA policy.
     #[allow(clippy::too_many_arguments)]
-    pub async fn start_with_bind_addr(
+    pub(crate) async fn start_with_bind_addr(
         policy: &ProxyPolicy,
         bind_addr: Option<SocketAddr>,
         opa_engine: Arc<OpaEngine>,
@@ -390,7 +520,15 @@ impl ProxyHandle {
                         let dtx = denial_tx.clone();
                         tokio::spawn(async move {
                             if let Err(err) = handle_tcp_connection(
-                                stream, opa, cache, spid, tls, inf, resolver, package_proxy, dtx,
+                                stream,
+                                opa,
+                                cache,
+                                spid,
+                                tls,
+                                inf,
+                                resolver,
+                                package_proxy,
+                                dtx,
                             )
                             .await
                             {
@@ -534,7 +672,6 @@ async fn handle_tcp_connection(
             opa_engine,
             identity_cache,
             entrypoint_pid,
-            secret_resolver,
             package_proxy,
             denial_tx.as_ref(),
         )
@@ -665,32 +802,237 @@ async fn handle_tcp_connection(
         }
     };
 
-    let resolved_addrs = match resolve_destination_addrs(&host, port, &endpoint_settings.allowed_ips).await {
-        Ok(addrs) => addrs,
-        Err(reason) => {
-            warn!(
-                dst_host = %host_lc,
-                dst_port = port,
-                reason = %reason,
-                "CONNECT blocked: destination validation failed"
-            );
-            emit_denial(
-                &denial_tx,
-                &host_lc,
-                port,
-                &binary_str,
-                &decision,
-                &reason,
-                "ssrf",
-            );
-            respond(&mut client, b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
-            return Ok(());
-        }
+    let resolved_addrs =
+        match resolve_destination_addrs(&host, port, &endpoint_settings.allowed_ips).await {
+            Ok(addrs) => addrs,
+            Err(reason) => {
+                warn!(
+                    dst_host = %host_lc,
+                    dst_port = port,
+                    reason = %reason,
+                    "CONNECT blocked: destination validation failed"
+                );
+                emit_denial(
+                    &denial_tx,
+                    &host_lc,
+                    port,
+                    &binary_str,
+                    &decision,
+                    &reason,
+                    "ssrf",
+                );
+                respond(&mut client, b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
+                return Ok(());
+            }
+        };
+
+    let l7_config = endpoint_settings.l7_config.clone();
+    let connect_msg = if l7_config.is_some() {
+        "CONNECT_L7"
+    } else {
+        "CONNECT"
     };
+
+    if let Some(l7_config) = l7_config {
+        let scoped_secret_injector = if endpoint_settings.secret_injection.is_empty() {
+            None
+        } else {
+            let Some(secret_resolver) = secret_resolver.as_ref() else {
+                let reason = "secret injection requires provider env placeholders, but no provider env is configured";
+                warn!(dst_host = %host_lc, dst_port = port, reason, "CONNECT blocked");
+                emit_denial(
+                    &denial_tx,
+                    &host_lc,
+                    port,
+                    &binary_str,
+                    &decision,
+                    reason,
+                    "secret-injection",
+                );
+                respond(&mut client, b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
+                return Ok(());
+            };
+            match secret_resolver.scoped_injector(&endpoint_settings.secret_injection) {
+                Ok(injector) => injector,
+                Err(error) => {
+                    let reason = error.to_string();
+                    warn!(dst_host = %host_lc, dst_port = port, reason = %reason, "CONNECT blocked");
+                    emit_denial(
+                        &denial_tx,
+                        &host_lc,
+                        port,
+                        &binary_str,
+                        &decision,
+                        &reason,
+                        "secret-injection",
+                    );
+                    respond(&mut client, b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
+                    return Ok(());
+                }
+            }
+        };
+
+        let route_context = match build_rest_route_context(
+            &host,
+            port,
+            &decision,
+            &endpoint_settings,
+            &resolved_addrs,
+            package_proxy.as_ref(),
+            tls_state.as_ref(),
+        ) {
+            Ok(context) => context,
+            Err(reason) => {
+                warn!(dst_host = %host_lc, dst_port = port, reason = %reason, "CONNECT blocked");
+                emit_denial(
+                    &denial_tx,
+                    &host_lc,
+                    port,
+                    &binary_str,
+                    &decision,
+                    &reason,
+                    "package-proxy",
+                );
+                respond(&mut client, b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
+                return Ok(());
+            }
+        };
+
+        respond(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+        info!(
+            src_addr = %peer_addr.ip(),
+            src_port = peer_addr.port(),
+            proxy_addr = %local_addr,
+            dst_host = %host_lc,
+            dst_port = port,
+            binary = %binary_str,
+            binary_pid = %pid_str,
+            ancestors = %ancestors_str,
+            cmdline = %cmdline_str,
+            action = "allow",
+            engine = "opa",
+            policy = %policy_str,
+            egress_via = %route_context.normal_route_name(),
+            egress_profile = %route_context.normal_egress_profile(),
+            upstream_proxy = %route_context.normal_upstream_proxy(),
+            resolved_ips = ?resolved_addrs,
+            reason = "",
+            connect_msg,
+        );
+
+        let tunnel_engine = opa_engine.clone_engine_for_tunnel().unwrap_or_else(|e| {
+            warn!(error = %e, "Failed to clone OPA engine for L7, falling back to empty engine");
+            regorus::Engine::new()
+        });
+
+        let ctx = crate::l7::relay::L7EvalContext {
+            host: host_lc.clone(),
+            port,
+            policy_name: matched_policy.clone().unwrap_or_default(),
+            binary_path: decision
+                .binary
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            ancestors: decision
+                .ancestors
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            cmdline_paths: decision
+                .cmdline_paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            scoped_secret_injector,
+            route_context,
+        };
+
+        if l7_config.tls == crate::l7::TlsMode::Terminate {
+            let Some(ref tls) = tls_state else {
+                let reason = "TLS termination requested but TLS state not configured";
+                warn!(host = %host_lc, port = port, reason, "TLS L7 relay blocked");
+                return Err(miette::miette!("{reason}"));
+            };
+            let l7_result = async {
+                let mut tls_client =
+                    crate::l7::tls::tls_terminate_client(client, tls, &host_lc).await?;
+                crate::l7::relay::relay_with_inspection(
+                    &l7_config,
+                    std::sync::Mutex::new(tunnel_engine),
+                    &mut tls_client,
+                    &ctx,
+                )
+                .await
+            };
+            if let Err(e) = l7_result.await {
+                if is_benign_relay_error(&e) {
+                    debug!(
+                        host = %host_lc,
+                        port = port,
+                        error = %e,
+                        "TLS L7 connection closed"
+                    );
+                } else {
+                    warn!(
+                        host = %host_lc,
+                        port = port,
+                        error = %e,
+                        "TLS L7 relay error"
+                    );
+                }
+            }
+        } else {
+            if l7_config.protocol == crate::l7::L7Protocol::Rest {
+                let mut peek_buf = [0u8; 8];
+                let n = client.peek(&mut peek_buf).await.into_diagnostic()?;
+                if n == 0 {
+                    return Ok(());
+                }
+                if !crate::l7::rest::looks_like_http(&peek_buf[..n]) {
+                    warn!(
+                        host = %host_lc,
+                        port = port,
+                        policy = %ctx.policy_name,
+                        "Expected REST protocol but received non-matching bytes. Connection rejected."
+                    );
+                    return Err(miette::miette!(
+                        "Protocol mismatch: expected HTTP but received non-HTTP bytes"
+                    ));
+                }
+            }
+            if let Err(e) = crate::l7::relay::relay_with_inspection(
+                &l7_config,
+                std::sync::Mutex::new(tunnel_engine),
+                &mut client,
+                &ctx,
+            )
+            .await
+            {
+                if is_benign_relay_error(&e) {
+                    debug!(
+                        host = %host_lc,
+                        port = port,
+                        error = %e,
+                        "L7 connection closed"
+                    );
+                } else {
+                    warn!(
+                        host = %host_lc,
+                        port = port,
+                        error = %e,
+                        "L7 relay error"
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
 
     if should_route_via_package_proxy(&endpoint_settings, package_proxy.as_ref(), &decision) {
         let Some(package_proxy) = package_proxy.as_ref() else {
-            let reason = "package proxy route requested but sandbox package proxy is not configured";
+            let reason =
+                "package proxy route requested but sandbox package proxy is not configured";
             warn!(dst_host = %host_lc, dst_port = port, reason, "CONNECT blocked");
             emit_denial(
                 &denial_tx,
@@ -724,22 +1066,6 @@ async fn handle_tcp_connection(
                 return Ok(());
             }
         };
-        if endpoint_settings.l7_config.is_some() {
-            let reason =
-                "endpoint uses egress_via=package_proxy and cannot also request OpenShell L7 inspection";
-            warn!(dst_host = %host_lc, dst_port = port, reason, "CONNECT blocked");
-            emit_denial(
-                &denial_tx,
-                &host_lc,
-                port,
-                &binary_str,
-                &decision,
-                reason,
-                "package-proxy",
-            );
-            respond(&mut client, b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
-            return Ok(());
-        }
 
         let mut upstream = match connect_via_package_proxy(package_proxy, &host, port).await {
             Ok(stream) => stream,
@@ -793,9 +1119,6 @@ async fn handle_tcp_connection(
     };
 
     respond(&mut client, b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
-
-    let l7_config = endpoint_settings.l7_config;
-    let connect_msg = if l7_config.is_some() { "CONNECT_L7" } else { "CONNECT" };
     info!(
         src_addr = %peer_addr.ip(),
         src_port = peer_addr.port(),
@@ -816,134 +1139,6 @@ async fn handle_tcp_connection(
         reason = "",
         connect_msg,
     );
-
-    if let Some(l7_config) = l7_config {
-        // Clone engine for per-tunnel L7 evaluation (cheap: shares compiled policy via Arc)
-        let tunnel_engine = opa_engine.clone_engine_for_tunnel().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to clone OPA engine for L7, falling back to L4-only");
-            // This shouldn't happen, but if it does fall through to copy_bidirectional
-            regorus::Engine::new()
-        });
-
-        let ctx = crate::l7::relay::L7EvalContext {
-            host: host_lc.clone(),
-            port,
-            policy_name: matched_policy.clone().unwrap_or_default(),
-            binary_path: decision
-                .binary
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            ancestors: decision
-                .ancestors
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
-            cmdline_paths: decision
-                .cmdline_paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
-            secret_resolver: secret_resolver.clone(),
-        };
-
-        if l7_config.tls == crate::l7::TlsMode::Terminate {
-            // TLS termination: MITM decrypt, inspect, re-encrypt
-            if let Some(ref tls) = tls_state {
-                let l7_result = async {
-                    let mut tls_client =
-                        crate::l7::tls::tls_terminate_client(client, tls, &host_lc).await?;
-                    let mut tls_upstream = crate::l7::tls::tls_connect_upstream(
-                        upstream,
-                        &host_lc,
-                        tls.upstream_config(),
-                    )
-                    .await?;
-                    // No protocol detection needed — ALPN proves HTTP
-                    crate::l7::relay::relay_with_inspection(
-                        &l7_config,
-                        std::sync::Mutex::new(tunnel_engine),
-                        &mut tls_client,
-                        &mut tls_upstream,
-                        &ctx,
-                    )
-                    .await
-                };
-                if let Err(e) = l7_result.await {
-                    if is_benign_relay_error(&e) {
-                        debug!(
-                            host = %host_lc,
-                            port = port,
-                            error = %e,
-                            "TLS L7 connection closed"
-                        );
-                    } else {
-                        warn!(
-                            host = %host_lc,
-                            port = port,
-                            error = %e,
-                            "TLS L7 relay error"
-                        );
-                    }
-                }
-            } else {
-                warn!(
-                    host = %host_lc,
-                    port = port,
-                    "TLS termination requested but TLS state not configured, falling back to L4"
-                );
-                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream)
-                    .await
-                    .into_diagnostic()?;
-            }
-        } else {
-            // Plaintext: protocol detection via peek on raw TcpStream
-            if l7_config.protocol == crate::l7::L7Protocol::Rest {
-                let mut peek_buf = [0u8; 8];
-                let n = client.peek(&mut peek_buf).await.into_diagnostic()?;
-                if n == 0 {
-                    return Ok(());
-                }
-                if !crate::l7::rest::looks_like_http(&peek_buf[..n]) {
-                    warn!(
-                        host = %host_lc,
-                        port = port,
-                        policy = %ctx.policy_name,
-                        "Expected REST protocol but received non-matching bytes. Connection rejected."
-                    );
-                    return Err(miette::miette!(
-                        "Protocol mismatch: expected HTTP but received non-HTTP bytes"
-                    ));
-                }
-            }
-            if let Err(e) = crate::l7::relay::relay_with_inspection(
-                &l7_config,
-                std::sync::Mutex::new(tunnel_engine),
-                &mut client,
-                &mut upstream,
-                &ctx,
-            )
-            .await
-            {
-                if is_benign_relay_error(&e) {
-                    debug!(
-                        host = %host_lc,
-                        port = port,
-                        error = %e,
-                        "L7 connection closed"
-                    );
-                } else {
-                    warn!(
-                        host = %host_lc,
-                        port = port,
-                        error = %e,
-                        "L7 relay error"
-                    );
-                }
-            }
-        }
-        return Ok(());
-    }
 
     // L4-only: raw bidirectional copy (existing behavior)
     let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream)
@@ -1432,6 +1627,7 @@ fn query_endpoint_settings(
                 l7_config: crate::l7::parse_l7_config(&val),
                 egress_via,
                 egress_profile: endpoint_config_string(&val, "egress_profile"),
+                secret_injection: endpoint_config_secret_injection(&val),
             })
         }
         Ok(None) => Ok(EndpointSettings::default()),
@@ -1458,6 +1654,38 @@ fn endpoint_config_strings(value: &regorus::Value, key: &str) -> Vec<String> {
                 .iter()
                 .filter_map(|value| match value {
                     regorus::Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn endpoint_config_bool(value: &regorus::Value, key: &str) -> bool {
+    let key = regorus::Value::String(key.into());
+    match value {
+        regorus::Value::Object(map) => matches!(map.get(&key), Some(regorus::Value::Bool(true))),
+        _ => false,
+    }
+}
+
+fn endpoint_config_secret_injection(value: &regorus::Value) -> Vec<SecretInjectionRule> {
+    let key = regorus::Value::String("secret_injection".into());
+    match value {
+        regorus::Value::Object(map) => match map.get(&key) {
+            Some(regorus::Value::Array(values)) => values
+                .iter()
+                .filter_map(|value| match value {
+                    regorus::Value::Object(_) => Some(SecretInjectionRule {
+                        env_var: endpoint_config_string(value, "env_var").unwrap_or_default(),
+                        proxy_value: endpoint_config_string(value, "proxy_value")
+                            .unwrap_or_default(),
+                        match_headers: endpoint_config_strings(value, "match_headers"),
+                        match_query: endpoint_config_bool(value, "match_query"),
+                        match_body: endpoint_config_bool(value, "match_body"),
+                    }),
                     _ => None,
                 })
                 .collect(),
@@ -1494,6 +1722,47 @@ fn resolve_package_proxy_profile(
     }
 }
 
+fn build_rest_route_context(
+    host: &str,
+    port: u16,
+    decision: &ConnectDecision,
+    endpoint_settings: &EndpointSettings,
+    resolved_addrs: &[SocketAddr],
+    package_proxy: Option<&PackageProxyConfig>,
+    tls_state: Option<&Arc<ProxyTlsState>>,
+) -> std::result::Result<RestRouteContext, String> {
+    let normal_route = if should_route_via_package_proxy(endpoint_settings, package_proxy, decision)
+    {
+        let package_proxy = package_proxy.ok_or_else(|| {
+            "package proxy route requested but sandbox package proxy is not configured".to_string()
+        })?;
+        let profile = resolve_package_proxy_profile(
+            endpoint_settings.egress_profile.as_deref(),
+            package_proxy,
+        )?;
+        RestNormalRoute::PackageProxy {
+            profile,
+            upstream_proxy: package_proxy.upstream_url().to_string(),
+        }
+    } else {
+        RestNormalRoute::Direct
+    };
+
+    Ok(RestRouteContext {
+        host: host.to_string(),
+        port,
+        tls_mode: endpoint_settings
+            .l7_config
+            .as_ref()
+            .map(|config| config.tls)
+            .unwrap_or(crate::l7::TlsMode::Passthrough),
+        resolved_addrs: resolved_addrs.to_vec(),
+        normal_route,
+        package_proxy: package_proxy.cloned(),
+        tls_state: tls_state.cloned(),
+    })
+}
+
 async fn connect_via_package_proxy(
     package_proxy: &PackageProxyConfig,
     target_host: &str,
@@ -1514,7 +1783,10 @@ async fn connect_via_package_proxy(
         request.push_str("\r\n");
     }
     request.push_str("\r\n");
-    upstream.write_all(request.as_bytes()).await.into_diagnostic()?;
+    upstream
+        .write_all(request.as_bytes())
+        .await
+        .into_diagnostic()?;
     upstream.flush().await.into_diagnostic()?;
 
     let mut buf = vec![0u8; MAX_HEADER_BYTES];
@@ -1544,7 +1816,9 @@ async fn connect_via_package_proxy(
         .nth(1)
         .unwrap_or("")
         .parse::<u16>()
-        .map_err(|_| miette::miette!("invalid upstream package proxy status line: {status_line}"))?;
+        .map_err(|_| {
+            miette::miette!("invalid upstream package proxy status line: {status_line}")
+        })?;
     if status_code != 200 {
         return Err(miette::miette!(
             "upstream package proxy CONNECT failed with status {status_code}: {status_line}"
@@ -1557,7 +1831,6 @@ async fn connect_via_package_proxy(
 fn rewrite_forward_request_for_upstream_proxy(
     raw: &[u8],
     used: usize,
-    secret_resolver: Option<&SecretResolver>,
     package_proxy: &PackageProxyConfig,
 ) -> Vec<u8> {
     let header_end = raw[..used]
@@ -1594,11 +1867,7 @@ fn rewrite_forward_request_for_upstream_proxy(
             continue;
         }
 
-        let rewritten_line = match secret_resolver {
-            Some(resolver) => rewrite_header_line(line, resolver),
-            None => line.to_string(),
-        };
-        output.extend_from_slice(rewritten_line.as_bytes());
+        output.extend_from_slice(line.as_bytes());
         output.extend_from_slice(b"\r\n");
 
         if lower.starts_with("via:") {
@@ -1916,12 +2185,7 @@ fn parse_proxy_uri(uri: &str) -> Result<(String, String, u16, String)> {
 /// strips proxy hop-by-hop headers, injects `Connection: close` and `Via`.
 ///
 /// Returns the rewritten request bytes (headers + any overflow body bytes).
-fn rewrite_forward_request(
-    raw: &[u8],
-    used: usize,
-    path: &str,
-    secret_resolver: Option<&SecretResolver>,
-) -> Vec<u8> {
+fn rewrite_forward_request(raw: &[u8], used: usize, path: &str) -> Vec<u8> {
     let header_end = raw[..used]
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -1973,12 +2237,7 @@ fn rewrite_forward_request(
             continue;
         }
 
-        let rewritten_line = match secret_resolver {
-            Some(resolver) => rewrite_header_line(line, resolver),
-            None => line.to_string(),
-        };
-
-        output.extend_from_slice(rewritten_line.as_bytes());
+        output.extend_from_slice(line.as_bytes());
         output.extend_from_slice(b"\r\n");
 
         if lower.starts_with("via:") {
@@ -2020,7 +2279,6 @@ async fn handle_forward_proxy(
     opa_engine: Arc<OpaEngine>,
     identity_cache: Arc<BinaryIdentityCache>,
     entrypoint_pid: Arc<AtomicU32>,
-    secret_resolver: Option<Arc<SecretResolver>>,
     package_proxy: Option<PackageProxyConfig>,
     denial_tx: Option<&mpsc::UnboundedSender<DenialEvent>>,
 ) -> Result<()> {
@@ -2206,7 +2464,8 @@ async fn handle_forward_proxy(
 
     if should_route_via_package_proxy(&endpoint_settings, package_proxy.as_ref(), &decision) {
         let Some(package_proxy) = package_proxy.as_ref() else {
-            let reason = "package proxy route requested but sandbox package proxy is not configured";
+            let reason =
+                "package proxy route requested but sandbox package proxy is not configured";
             emit_denial_simple(
                 denial_tx,
                 &host_lc,
@@ -2274,12 +2533,21 @@ async fn handle_forward_proxy(
             reason = "",
             "FORWARD",
         );
-        let rewritten = rewrite_forward_request_for_upstream_proxy(
-            buf,
-            used,
-            secret_resolver.as_deref(),
-            package_proxy,
-        );
+        let rewritten = rewrite_forward_request_for_upstream_proxy(buf, used, package_proxy);
+        if contains_placeholder_bytes(&rewritten) {
+            let reason = "forward proxy placeholder rewriting is no longer supported; use CONNECT with protocol: rest and tls: terminate";
+            emit_denial_simple(
+                denial_tx,
+                &host_lc,
+                port,
+                &binary_str,
+                &decision,
+                reason,
+                "forward-placeholder",
+            );
+            respond(client, b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
+            return Ok(());
+        }
         upstream.write_all(&rewritten).await.into_diagnostic()?;
         let _ = tokio::io::copy_bidirectional(client, &mut upstream)
             .await
@@ -2324,7 +2592,21 @@ async fn handle_forward_proxy(
         "FORWARD",
     );
 
-    let rewritten = rewrite_forward_request(buf, used, &path, secret_resolver.as_deref());
+    let rewritten = rewrite_forward_request(buf, used, &path);
+    if contains_placeholder_bytes(&rewritten) {
+        let reason = "forward proxy placeholder rewriting is no longer supported; use CONNECT with protocol: rest and tls: terminate";
+        emit_denial_simple(
+            denial_tx,
+            &host_lc,
+            port,
+            &binary_str,
+            &decision,
+            reason,
+            "forward-placeholder",
+        );
+        respond(client, b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
+        return Ok(());
+    }
     upstream.write_all(&rewritten).await.into_diagnostic()?;
     let _ = tokio::io::copy_bidirectional(client, &mut upstream)
         .await
@@ -2941,7 +3223,7 @@ mod tests {
     fn test_rewrite_get_request() {
         let raw =
             b"GET http://10.0.0.1:8000/api HTTP/1.1\r\nHost: 10.0.0.1:8000\r\nAccept: */*\r\n\r\n";
-        let result = rewrite_forward_request(raw, raw.len(), "/api", None);
+        let result = rewrite_forward_request(raw, raw.len(), "/api");
         let result_str = String::from_utf8_lossy(&result);
         assert!(result_str.starts_with("GET /api HTTP/1.1\r\n"));
         assert!(result_str.contains("Host: 10.0.0.1:8000"));
@@ -2952,7 +3234,7 @@ mod tests {
     #[test]
     fn test_rewrite_strips_proxy_headers() {
         let raw = b"GET http://host/p HTTP/1.1\r\nHost: host\r\nProxy-Authorization: Basic abc\r\nProxy-Connection: keep-alive\r\nAccept: */*\r\n\r\n";
-        let result = rewrite_forward_request(raw, raw.len(), "/p", None);
+        let result = rewrite_forward_request(raw, raw.len(), "/p");
         let result_str = String::from_utf8_lossy(&result);
         assert!(
             !result_str
@@ -2966,7 +3248,7 @@ mod tests {
     #[test]
     fn test_rewrite_replaces_connection_header() {
         let raw = b"GET http://host/p HTTP/1.1\r\nHost: host\r\nConnection: keep-alive\r\n\r\n";
-        let result = rewrite_forward_request(raw, raw.len(), "/p", None);
+        let result = rewrite_forward_request(raw, raw.len(), "/p");
         let result_str = String::from_utf8_lossy(&result);
         assert!(result_str.contains("Connection: close"));
         assert!(!result_str.contains("keep-alive"));
@@ -2975,7 +3257,7 @@ mod tests {
     #[test]
     fn test_rewrite_preserves_body_overflow() {
         let raw = b"POST http://host/api HTTP/1.1\r\nHost: host\r\nContent-Length: 13\r\n\r\n{\"key\":\"val\"}";
-        let result = rewrite_forward_request(raw, raw.len(), "/api", None);
+        let result = rewrite_forward_request(raw, raw.len(), "/api");
         let result_str = String::from_utf8_lossy(&result);
         assert!(result_str.contains("{\"key\":\"val\"}"));
         assert!(result_str.contains("POST /api HTTP/1.1"));
@@ -2984,7 +3266,7 @@ mod tests {
     #[test]
     fn test_rewrite_preserves_existing_via() {
         let raw = b"GET http://host/p HTTP/1.1\r\nHost: host\r\nVia: 1.0 upstream\r\n\r\n";
-        let result = rewrite_forward_request(raw, raw.len(), "/p", None);
+        let result = rewrite_forward_request(raw, raw.len(), "/p");
         let result_str = String::from_utf8_lossy(&result);
         assert!(result_str.contains("Via: 1.0 upstream"));
         // Should not add a second Via header
@@ -2992,17 +3274,14 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_resolves_placeholder_auth_headers() {
-        let (_, resolver) = SecretResolver::from_provider_env(
-            [("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]
-                .into_iter()
-                .collect(),
-        );
+    fn test_rewrite_preserves_placeholder_auth_headers() {
         let raw = b"GET http://host/p HTTP/1.1\r\nHost: host\r\nAuthorization: Bearer openshell:resolve:env:ANTHROPIC_API_KEY\r\n\r\n";
-        let result = rewrite_forward_request(raw, raw.len(), "/p", resolver.as_ref());
+        let result = rewrite_forward_request(raw, raw.len(), "/p");
         let result_str = String::from_utf8_lossy(&result);
-        assert!(result_str.contains("Authorization: Bearer sk-test"));
-        assert!(!result_str.contains("openshell:resolve:env:ANTHROPIC_API_KEY"));
+        assert!(
+            result_str.contains("Authorization: Bearer openshell:resolve:env:ANTHROPIC_API_KEY")
+        );
+        assert!(contains_placeholder_bytes(&result));
     }
 
     #[test]
@@ -3014,7 +3293,10 @@ mod tests {
             vec![
                 (PACKAGE_PROXY_ENABLED_ENV, Some("1")),
                 (PACKAGE_PROXY_PROFILE_ENV, Some("socket")),
-                (PACKAGE_PROXY_UPSTREAM_URL_ENV, Some("http://proxy.socket.dev:8080")),
+                (
+                    PACKAGE_PROXY_UPSTREAM_URL_ENV,
+                    Some("http://proxy.socket.dev:8080"),
+                ),
                 (
                     PACKAGE_PROXY_AUTHORIZATION_FILE_ENV,
                     auth_file.path().to_str(),
@@ -3147,7 +3429,10 @@ mod tests {
         with_vars(
             vec![
                 (PACKAGE_PROXY_ENABLED_ENV, Some("1")),
-                (PACKAGE_PROXY_UPSTREAM_URL_ENV, Some("http://proxy.socket.dev:8080")),
+                (
+                    PACKAGE_PROXY_UPSTREAM_URL_ENV,
+                    Some("http://proxy.socket.dev:8080"),
+                ),
                 (
                     PACKAGE_PROXY_AUTHORIZATION_FILE_ENV,
                     auth_file.path().to_str(),
@@ -3160,12 +3445,8 @@ mod tests {
                     .expect("config parse")
                     .expect("config should exist");
                 let raw = b"GET http://registry.npmjs.org/pkg HTTP/1.1\r\nHost: registry.npmjs.org\r\nProxy-Authorization: Basic old\r\n\r\n";
-                let rewritten = rewrite_forward_request_for_upstream_proxy(
-                    raw,
-                    raw.len(),
-                    None,
-                    &package_proxy,
-                );
+                let rewritten =
+                    rewrite_forward_request_for_upstream_proxy(raw, raw.len(), &package_proxy);
                 let rewritten = String::from_utf8_lossy(&rewritten);
                 assert!(rewritten.starts_with("GET http://registry.npmjs.org/pkg HTTP/1.1\r\n"));
                 assert!(rewritten.contains("Proxy-Authorization: Bearer proxy-token"));

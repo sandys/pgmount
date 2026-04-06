@@ -14,6 +14,8 @@ Everything in this repo supports that flow.
 OpenEral also extends the OpenShell outbound proxy path so allowed package-manager
 traffic can be chained through an upstream package proxy. FUSE remains optional at
 the product level, but the current published sandbox still includes the FUSE path.
+It also supports boundary-level secret injection on inspected REST endpoints, so
+workloads can carry placeholder tokens instead of real credentials.
 
 One important constraint:
 
@@ -75,6 +77,8 @@ OpenEral FUSE support depends on three custom runtime images:
   - requests the FUSE device resource
 - `sandbox`
   - contains `openeral`, `fuse3`, and the `/etc/fstab` mount declarations
+  - ships the repo-owned `/etc/openshell/policy.yaml` used by the supervisor
+    inside the sandbox
 
 In normal use you only set two refs:
 
@@ -93,6 +97,41 @@ Unsupported combinations:
 
 The repo still vendors OpenShell source because the custom `cluster` and `gateway` images are built from it. That vendored source is for image builds, not for the user-facing CLI.
 
+### Sandbox Policy Contract
+
+The openeral sandbox image does not rely on whatever policy file happens to ship
+in the upstream base image.
+
+It explicitly copies this repo's `sandboxes/openeral/policy.yaml` into:
+
+```text
+/etc/openshell/policy.yaml
+```
+
+That file is the authoritative runtime policy for the published openeral
+sandbox image.
+
+Why this matters:
+
+- the upstream base image already allows the normal Claude egress path
+- openeral now also relies on supervisor-managed placeholder provider env
+- the sandbox policy therefore has to authorize boundary secret injection for
+  the Anthropic path used by Claude Code
+
+Today the important rules are:
+
+- `claude_code`
+  - allows Claude traffic to `api.anthropic.com`
+  - uses `protocol: rest`
+  - uses `tls: terminate`
+  - injects `ANTHROPIC_API_KEY` on the `x-api-key` header
+- `anthropic_secret_test`
+  - allows `curl` to call `GET /v1/models`
+  - uses the same placeholder-to-secret rewrite path
+
+If you change secret-injection behavior for the sandbox, update
+`sandboxes/openeral/policy.yaml` and rebuild the sandbox image.
+
 ### Optional Package Proxy
 
 Package installs can be routed through OpenShell's existing sandbox proxy and
@@ -110,6 +149,72 @@ Current implementation details:
 - package-proxy routing is enforced inside the built-in OpenShell sandbox proxy,
   not by a separate sidecar
 - non-package traffic still follows the normal OpenShell allow/deny path
+
+### Boundary Secret Injection
+
+OpenEral also extends the same built-in OpenShell proxy/policy path with
+endpoint-scoped secret injection.
+
+- workloads see placeholder values like `openshell:resolve:env:OPENAI_API_KEY`
+- real secrets stay in provider env and are only redeemed inside the sandbox proxy
+- secret injection is controlled per endpoint through normal OpenShell
+  `network_policies`
+- v1 supports header and query-string rewriting on inspected REST traffic
+
+Required policy shape:
+
+- `protocol: rest`
+- `tls: terminate`
+- `secret_injection:` rules on the endpoint
+
+Routing behavior for an endpoint that has both `secret_injection` and
+`egress_via: package_proxy`:
+
+- requests without placeholders use the endpoint's normal route
+- requests with authorized placeholders are rewritten and sent direct to origin
+- requests with unauthorized or leaked placeholders are denied
+
+Important migration note:
+
+- plain `HTTP_PROXY` forward-proxy requests no longer get automatic placeholder
+  rewriting
+- placeholder-based auth must use the CONNECT + `protocol: rest` +
+  `tls: terminate` path
+
+Current openeral sandbox detail:
+
+- the published sandbox policy authorizes Claude's Anthropic path by rewriting
+  the placeholder `ANTHROPIC_API_KEY` into the `x-api-key` header on the
+  `claude_code` policy entry
+- this is what makes the stock command
+  `HOME=/home/agent claude -p 'Reply with READY and nothing else.'`
+  work inside the sandbox while the child process still only sees the
+  placeholder env value
+
+Example policy shape:
+
+```yaml
+network_policies:
+  openai_api:
+    name: openai_api
+    endpoints:
+      - host: api.openai.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        egress_via: package_proxy
+        egress_profile: socket
+        rules:
+          - allow:
+              method: POST
+              path: /v1/**
+        secret_injection:
+          - env_var: OPENAI_API_KEY
+            match_headers: [Authorization]
+            match_query: true
+    binaries:
+      - path: /usr/bin/curl
+```
 
 Cluster-scoped control knobs:
 
@@ -197,6 +302,14 @@ Then use:
 - `OPENERAL_SANDBOX_IMAGE=172.17.0.1:5000/openshell/openeral/sandbox:dev`
 
 The cluster image is pulled by host Docker, so `127.0.0.1:5000` is correct there. The cluster image itself is baked to resolve its sibling gateway image via `172.17.0.1:5000`, and the sandbox image is also pulled from inside the cluster, so use `172.17.0.1:5000` for the sandbox image reference and the registry host.
+
+If you change only sandbox policy or sandbox packaging:
+
+- rebuild and push the sandbox image
+- keep the cluster/gateway image pair version-locked
+- if your local cluster image was baked with a specific gateway tag, make sure
+  that gateway tag exists in the registry even when the gateway code itself did
+  not change
 
 ## CI Contract
 
@@ -341,6 +454,35 @@ Expected properties:
 - `/db` and `/home/agent` are both present in `/proc/mounts`
 - `/home/agent` is writable by the sandbox user
 - Claude runs successfully with `HOME=/home/agent`
+
+## Live Validation Status
+
+The current tree was live-validated on April 3, 2026 with the stock upstream
+`openshell` CLI and the openeral images.
+
+What was proven in the live run:
+
+1. inside the sandbox, `ANTHROPIC_API_KEY` was visible only as:
+   - `openshell:resolve:env:ANTHROPIC_API_KEY`
+2. `HOME=/home/agent claude -p 'Reply with READY and nothing else.'` succeeded
+3. `/home/agent` was mounted by `openeral` and `.claude*` files were persisted
+   into `_openeral.workspace_files`
+4. a separate sandbox run using:
+
+```bash
+curl -fsS https://api.anthropic.com/v1/models \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H 'anthropic-version: 2023-06-01'
+```
+
+   also succeeded while `$ANTHROPIC_API_KEY` was still the placeholder value in
+   the child environment
+
+This is the current reference proof that:
+
+- the positive Claude path works
+- boundary secret injection works for the Anthropic path
+- Claude state persists into PostgreSQL-backed `/home/agent`
 
 If you want to verify persistence in PostgreSQL directly:
 

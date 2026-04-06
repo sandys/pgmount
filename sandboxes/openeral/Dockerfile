@@ -42,5 +42,18 @@ RUN mkdir -p /db /home/agent && \
       'env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0' \
       >> /etc/fstab
 
+# StringCost integration: allow Claude to reach the StringCost proxy for
+# cost-tracked API calls when ANTHROPIC_BASE_URL points at StringCost.
+RUN cat >> /etc/openshell/policy.yaml <<'POLICY'
+
+  stringcost:
+    name: stringcost
+    endpoints:
+      - { host: proxy.stringcost.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/node }
+POLICY
+
 # Ship project-local skills into the sandbox home.
 COPY .claude/skills/ /sandbox/.skills/

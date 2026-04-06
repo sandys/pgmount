@@ -2,3 +2,14 @@
 agent-task.txt
 openeral-shell/.env
 target/
+.omx/
+.codex/*
+!.codex/skills
+AGENTS.md
+.claude/skills/*
+!.claude/skills/openeral-dev/
+!.claude/skills/openeral-dev/**
+!.claude/skills/openeral-navigate/
+!.claude/skills/openeral-navigate/**
+!.claude/skills/openeral-shell/
+!.claude/skills/openeral-shell/**

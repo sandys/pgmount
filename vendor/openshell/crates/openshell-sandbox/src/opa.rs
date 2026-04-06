@@ -687,6 +687,22 @@ fn proto_to_opa_data_json(proto: &ProtoSandboxPolicy) -> String {
                     if !e.egress_profile.is_empty() {
                         ep["egress_profile"] = e.egress_profile.clone().into();
                     }
+                    if !e.secret_injection.is_empty() {
+                        let secret_injection: Vec<serde_json::Value> = e
+                            .secret_injection
+                            .iter()
+                            .map(|rule| {
+                                serde_json::json!({
+                                    "env_var": rule.env_var,
+                                    "proxy_value": rule.proxy_value,
+                                    "match_headers": rule.match_headers,
+                                    "match_query": rule.match_query,
+                                    "match_body": rule.match_body,
+                                })
+                            })
+                            .collect();
+                        ep["secret_injection"] = secret_injection.into();
+                    }
                     ep
                 })
                 .collect();
@@ -2549,7 +2565,77 @@ process:
             get_str(&config, "egress_via").as_deref(),
             Some("package_proxy")
         );
-        assert_eq!(get_str(&config, "egress_profile").as_deref(), Some("socket"));
+        assert_eq!(
+            get_str(&config, "egress_profile").as_deref(),
+            Some("socket")
+        );
+    }
+
+    #[test]
+    fn endpoint_config_returns_secret_injection_metadata() {
+        let data = r#"
+network_policies:
+  api:
+    name: api
+    endpoints:
+      - host: api.example.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        rules:
+          - allow:
+              method: GET
+              path: /v1/**
+        secret_injection:
+          - env_var: OPENAI_API_KEY
+            match_headers: [Authorization]
+            match_query: true
+    binaries:
+      - { path: /usr/bin/curl }
+filesystem_policy:
+  include_workdir: true
+  read_only: []
+  read_write: []
+landlock:
+  compatibility: best_effort
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+"#;
+        let engine = OpaEngine::from_strings(TEST_POLICY, data).unwrap();
+        let input = NetworkInput {
+            host: "api.example.com".into(),
+            port: 443,
+            binary_path: PathBuf::from("/usr/bin/curl"),
+            binary_sha256: "unused".into(),
+            ancestors: vec![],
+            cmdline_paths: vec![],
+        };
+        let config = engine
+            .query_endpoint_config(&input)
+            .unwrap()
+            .expect("expected matched endpoint config");
+
+        let rules = match &config {
+            regorus::Value::Object(map) => map
+                .get(&regorus::Value::String("secret_injection".into()))
+                .and_then(|value| match value {
+                    regorus::Value::Array(arr) => Some(arr),
+                    _ => None,
+                })
+                .expect("secret_injection array"),
+            other => panic!("expected endpoint config object, got {other:?}"),
+        };
+        assert_eq!(rules.len(), 1);
+
+        let rule = &rules[0];
+        assert_eq!(get_str(rule, "env_var").as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(
+            get_str_array(rule, "match_headers"),
+            vec!["Authorization".to_string()]
+        );
+        assert_eq!(get_bool(rule, "match_query"), Some(true));
+        assert_ne!(get_bool(rule, "match_body"), Some(true));
     }
 
     #[test]

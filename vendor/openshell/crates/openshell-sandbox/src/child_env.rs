@@ -26,14 +26,21 @@ fn merged_bundle_path(
     ca_cert_path: &Path,
     combined_bundle_path: &Path,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
-    let Some(package_proxy_ca_path) = std::env::var_os(PACKAGE_PROXY_CA_FILE_ENV).map(PathBuf::from)
+    let Some(package_proxy_ca_path) =
+        std::env::var_os(PACKAGE_PROXY_CA_FILE_ENV).map(PathBuf::from)
     else {
-        return Ok((ca_cert_path.to_path_buf(), combined_bundle_path.to_path_buf()));
+        return Ok((
+            ca_cert_path.to_path_buf(),
+            combined_bundle_path.to_path_buf(),
+        ));
     };
 
     let package_proxy_ca = std::fs::read_to_string(&package_proxy_ca_path)?;
     if package_proxy_ca.trim().is_empty() {
-        return Ok((ca_cert_path.to_path_buf(), combined_bundle_path.to_path_buf()));
+        return Ok((
+            ca_cert_path.to_path_buf(),
+            combined_bundle_path.to_path_buf(),
+        ));
     }
 
     let mut node_extra = std::fs::read_to_string(ca_cert_path)?;
@@ -67,10 +74,17 @@ fn merged_bundle_path(
     Ok((node_extra_path, combined_path))
 }
 
-pub(crate) fn tls_env_vars(ca_cert_path: &Path, combined_bundle_path: &Path) -> Vec<(&'static str, String)> {
+pub(crate) fn tls_env_vars(
+    ca_cert_path: &Path,
+    combined_bundle_path: &Path,
+) -> Vec<(&'static str, String)> {
     let (node_extra_ca_path, combined_bundle_path) =
-        merged_bundle_path(ca_cert_path, combined_bundle_path)
-            .unwrap_or_else(|_| (ca_cert_path.to_path_buf(), combined_bundle_path.to_path_buf()));
+        merged_bundle_path(ca_cert_path, combined_bundle_path).unwrap_or_else(|_| {
+            (
+                ca_cert_path.to_path_buf(),
+                combined_bundle_path.to_path_buf(),
+            )
+        });
     let node_extra_ca_path = node_extra_ca_path.display().to_string();
     let combined_bundle_path = combined_bundle_path.display().to_string();
 
@@ -141,12 +155,18 @@ mod tests {
         let openshell_ca = temp.path().join("openshell-ca.pem");
         let combined_bundle = temp.path().join("ca-bundle.pem");
         let package_proxy_ca = temp.path().join("package-proxy-ca.pem");
-        std::fs::write(&openshell_ca, "-----BEGIN CERTIFICATE-----\nopenshell\n-----END CERTIFICATE-----\n")
-            .expect("write openshell ca");
+        std::fs::write(
+            &openshell_ca,
+            "-----BEGIN CERTIFICATE-----\nopenshell\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write openshell ca");
         std::fs::write(&combined_bundle, "-----BEGIN CERTIFICATE-----\nsystem\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nopenshell\n-----END CERTIFICATE-----\n")
             .expect("write combined bundle");
-        std::fs::write(&package_proxy_ca, "-----BEGIN CERTIFICATE-----\npackage-proxy\n-----END CERTIFICATE-----\n")
-            .expect("write package proxy ca");
+        std::fs::write(
+            &package_proxy_ca,
+            "-----BEGIN CERTIFICATE-----\npackage-proxy\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write package proxy ca");
 
         let stdout = with_var(
             PACKAGE_PROXY_CA_FILE_ENV,
