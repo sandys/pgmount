@@ -67,6 +67,26 @@ openshell sandbox create \
 
 npm traffic routes through `registry.socket.dev` with credential injection via the OpenShell proxy. The sandbox never sees the real `SOCKET_TOKEN`.
 
+**Add StringCost cost tracking** — presign your Anthropic key and pass the URL:
+
+```bash
+# Presign on the host
+PRESIGN=$(curl -s -X POST \
+  -H "Authorization: Bearer $STRINGCOST_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"anthropic","client_api_key":"'"$ANTHROPIC_API_KEY"'","path":["/v1/messages"],"expires_in":-1,"max_uses":-1,"tags":["openeral"],"metadata":{"source":"openeral"}}' \
+  https://app.stringcost.com/v1/presign)
+STRINGCOST_URL=$(echo "$PRESIGN" | jq -r '.url' | sed 's|/v1/.*$||')
+
+# Launch with StringCost
+openshell sandbox create \
+  --from ghcr.io/sandys/openeral/sandbox:just-bash \
+  --provider db --provider claude --auto-providers \
+  -- env ANTHROPIC_BASE_URL="$STRINGCOST_URL" /opt/openeral/setup.sh
+```
+
+Claude's API traffic routes through StringCost for cost tracking. The OpenShell proxy rewrites the `x-api-key` placeholder to the real key — Claude picks its own model, no override.
+
 ## What you get
 
 - **Isolated home** — Claude Code runs in its own `$HOME`, separate from your system
