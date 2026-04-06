@@ -5,13 +5,19 @@
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                    # typecheck + 20 lints + unit tests
+pnpm check                    # typecheck + 29 lints + 63 unit tests
 
 # Integration (requires PostgreSQL)
 DATABASE_URL='...' node test-integration.mjs
 
-# E2E (3-session persistence + Claude API)
-DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
+# Docker image verification (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_sandbox_e2e.sh
+
+# Setup.sh flow inside container (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_setup_e2e.sh
+
+# Real Claude Code persistence (requires PostgreSQL + ANTHROPIC_API_KEY)
+DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh
 ```
 
 ## Project Structure
@@ -25,7 +31,7 @@ DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
   - `src/safety.ts` — command safety analysis via just-bash parse() AST
   - `src/shell.ts` — createOpeneralShell(), createToolHandler()
   - `src/index.ts` — public API
-  - `lint.mjs` — 24 structural lint rules
+  - `lint.mjs` — 29 structural lint rules
 - `sandboxes/openeral/` — OpenShell sandbox image (stock base, no FUSE)
   - `Dockerfile` — Node.js + openeral-js on stock OpenShell base
   - `openeral-bash.mjs` — daemon/client bridge for custom agents
