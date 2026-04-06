@@ -436,6 +436,53 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Lint 23: policy.yaml must not use fork-specific fields
+// Catches: dead secret_injection / egress_via fields that stock OpenShell ignores
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: no fork-specific policy fields ---');
+
+try {
+  const policy = readFileSync('../sandboxes/openeral/policy.yaml', 'utf8');
+  if (/secret_injection:/i.test(policy)) {
+    fail('sandboxes/openeral/policy.yaml', 'contains secret_injection: — stock OpenShell handles this automatically via SecretResolver');
+  }
+  if (/egress_via:/i.test(policy)) {
+    fail('sandboxes/openeral/policy.yaml', 'contains egress_via: — not supported in stock OpenShell');
+  }
+  if (/egress_profile:/i.test(policy)) {
+    fail('sandboxes/openeral/policy.yaml', 'contains egress_profile: — not supported in stock OpenShell');
+  }
+  pass('no fork-specific fields in policy.yaml');
+} catch {
+  pass('policy.yaml not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
+// Lint 24: Socket.dev endpoint must use protocol: rest + tls: terminate
+// Catches: Socket.dev credential injection won't work without TLS termination
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: Socket.dev endpoint has TLS terminate ---');
+
+try {
+  const policy = readFileSync('../sandboxes/openeral/policy.yaml', 'utf8');
+  if (policy.includes('registry.socket.dev')) {
+    // Find the socket endpoint block and verify it has tls: terminate
+    const socketSection = policy.slice(policy.indexOf('registry.socket.dev'));
+    const nextPolicy = socketSection.indexOf('\n  binaries:');
+    const socketBlock = socketSection.slice(0, nextPolicy > 0 ? nextPolicy : 200);
+    if (!socketBlock.includes('tls: terminate')) {
+      fail('sandboxes/openeral/policy.yaml', 'registry.socket.dev must have tls: terminate for credential injection');
+    } else {
+      pass('Socket.dev endpoint has TLS terminate');
+    }
+  } else {
+    pass('no Socket.dev endpoint (skipped)');
+  }
+} catch {
+  pass('policy.yaml not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

@@ -53,6 +53,20 @@ openshell sandbox create \
 
 Stock OpenShell — no custom cluster or gateway images.
 
+**Add Socket.dev package scanning** — register a Socket provider:
+
+```bash
+openshell provider create \
+  --name socket --type generic --credential SOCKET_TOKEN
+
+openshell sandbox create \
+  --from ghcr.io/sandys/openeral/sandbox:just-bash \
+  --provider db --provider claude --provider socket --auto-providers \
+  -- /opt/openeral/setup.sh
+```
+
+npm traffic routes through `registry.socket.dev` with credential injection via the OpenShell proxy. The sandbox never sees the real `SOCKET_TOKEN`.
+
 ## What you get
 
 - **Isolated home** — Claude Code runs in its own `$HOME`, separate from your system

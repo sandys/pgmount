@@ -66,6 +66,15 @@ node -e "
   });
 "
 
+# Configure Socket.dev registry if SOCKET_TOKEN provider is available.
+# The token value is a placeholder (openshell:resolve:env:SOCKET_TOKEN) —
+# the OpenShell proxy resolves it to the real token in auth headers.
+if [ -n "${SOCKET_TOKEN:-}" ]; then
+  echo "setup.sh: configuring npm to use Socket.dev registry..."
+  npm config set registry https://registry.socket.dev/npm/
+  npm config set //registry.socket.dev/npm/:_authToken "$SOCKET_TOKEN"
+fi
+
 echo "setup.sh: starting openeral-bash daemon..."
 node "$OPENERAL_DIR/openeral-bash.mjs" --daemon &
 DAEMON_PID=$!
