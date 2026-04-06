@@ -1,9 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-# Helm chart tasks
-
-["helm:lint"]
-description = "Lint the openshell helm chart"
-run = "helm lint deploy/helm/openshell"
-hide = true
