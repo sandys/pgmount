@@ -36,5 +36,5 @@ COPY sandboxes/openeral/policy.yaml /etc/openshell/policy.yaml
 # Skills for Claude Code
 COPY .claude/skills/ /sandbox/.skills/
 
-# Workspace directory (populated by WorkspaceFs via just-bash, not FUSE)
-RUN mkdir -p /home/agent
+# Workspace directory — must be owned by sandbox user so setup.sh can write .npmrc
+RUN mkdir -p /home/agent && chown sandbox:sandbox /home/agent

@@ -483,6 +483,112 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Lint 25: Socket.dev policy must be read-only (least privilege)
+// Catches: access: full on registry that only needs GET for npm install
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: Socket.dev is read-only ---');
+
+try {
+  const policy = readFileSync('../sandboxes/openeral/policy.yaml', 'utf8');
+  if (policy.includes('registry.socket.dev')) {
+    const socketStart = policy.indexOf('socket_packages:');
+    const nextPol = policy.indexOf('\n  #', socketStart + 1);
+    const socketBlock = policy.slice(socketStart, nextPol > 0 ? nextPol : undefined);
+    if (socketBlock.includes('access: full')) {
+      fail('sandboxes/openeral/policy.yaml', 'Socket.dev policy must use access: read-only, not access: full');
+    } else {
+      pass('Socket.dev policy is read-only');
+    }
+  } else {
+    pass('no Socket.dev endpoint (skipped)');
+  }
+} catch {
+  pass('policy.yaml not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
+// Lint 26: setup.sh must not touch user's .npmrc
+// Catches: clobbering or deleting user-managed /home/agent/.npmrc
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: setup.sh does not touch user .npmrc ---');
+
+try {
+  const setup = readFileSync('../sandboxes/openeral/setup.sh', 'utf8');
+  if (setup.includes('/home/agent/.npmrc')) {
+    fail('sandboxes/openeral/setup.sh', 'must not write or delete /home/agent/.npmrc — use a separate openeral-managed file + NPM_CONFIG_USERCONFIG');
+  } else if (setup.includes('npm config set')) {
+    fail('sandboxes/openeral/setup.sh', 'must not use npm config set (writes to user HOME)');
+  } else {
+    pass('setup.sh does not touch user .npmrc');
+  }
+} catch {
+  pass('setup.sh not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
+// Lint 27: no stale test files referencing vendor/ or fork-specific fields
+// Catches: tests that depend on the removed vendor/openshell/ tree
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: no stale vendor test scripts ---');
+
+try {
+  const { readdirSync } = await import('node:fs');
+  const testDir = '../tests';
+  try {
+    const tests = readdirSync(testDir);
+    for (const t of tests) {
+      const content = readFileSync(`${testDir}/${t}`, 'utf8');
+      if (content.includes('vendor/openshell')) {
+        fail(`tests/${t}`, 'references vendor/openshell which no longer exists');
+      }
+    }
+  } catch {}
+  pass('no stale vendor test scripts');
+} catch {}
+
+// ---------------------------------------------------------------------------
+// Lint 28: setup.sh must use NPM_CONFIG_USERCONFIG for Socket.dev config
+// Catches: writing npm config to user's HOME instead of a temp file
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: Socket.dev uses NPM_CONFIG_USERCONFIG ---');
+
+try {
+  const setup = readFileSync('../sandboxes/openeral/setup.sh', 'utf8');
+  if (setup.includes('SOCKET_TOKEN') && !setup.includes('NPM_CONFIG_USERCONFIG')) {
+    fail('sandboxes/openeral/setup.sh', 'must set NPM_CONFIG_USERCONFIG to point npm at the openeral-managed file');
+  } else {
+    pass('setup.sh uses NPM_CONFIG_USERCONFIG');
+  }
+} catch {
+  pass('setup.sh not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
+// Lint 29: skill must not unconditionally include --provider socket
+// Catches: making optional Socket provider mandatory in the launch command
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: skill socket provider is conditional ---');
+
+try {
+  const skill = readFileSync('../.claude/skills/openeral-shell/SKILL.md', 'utf8');
+  // Find the openshell sandbox create line in Step 3c
+  if (skill.includes('--provider socket --auto-providers')) {
+    // Check it's inside a conditional block
+    const socketIdx = skill.indexOf('--provider socket');
+    const precedingBlock = skill.slice(Math.max(0, socketIdx - 300), socketIdx);
+    if (!precedingBlock.includes('SOCKET_TOKEN')) {
+      fail('.claude/skills/openeral-shell/SKILL.md', '--provider socket must be conditional on SOCKET_TOKEN');
+    } else {
+      pass('skill socket provider is conditional');
+    }
+  } else {
+    pass('skill socket provider is conditional (not in launch command)');
+  }
+} catch {
+  pass('skill not found (skipped)');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

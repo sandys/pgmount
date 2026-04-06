@@ -156,10 +156,19 @@ This path uses [just-bash](https://github.com/vercel-labs/just-bash) with Postgr
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                    # typecheck + lint + unit tests
+pnpm check                    # typecheck + 29 lints + 63 unit tests
 
+# Integration (requires PostgreSQL)
 DATABASE_URL='...' node test-integration.mjs
-DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
+
+# Docker image verification (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_sandbox_e2e.sh
+
+# Setup.sh flow inside container (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_setup_e2e.sh
+
+# Real Claude Code persistence (requires PostgreSQL + ANTHROPIC_API_KEY)
+DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh
 ```
 
 ## Project structure
@@ -173,7 +182,7 @@ openeral-js/                  # TypeScript package
   src/workspace-fs/           # Read-write /home/agent filesystem
   src/db/                     # SQL queries, migrations
   src/safety.ts               # Command safety analysis
-  lint.mjs                    # 24 structural lint rules
+  lint.mjs                    # 29 structural lint rules
 
 sandboxes/openeral/           # OpenShell sandbox image
   Dockerfile                  # Stock base + Node.js + openeral-js

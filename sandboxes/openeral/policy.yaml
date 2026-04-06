@@ -59,6 +59,10 @@ network_policies:
   # When --provider socket is configured with SOCKET_TOKEN, npm traffic
   # routes to registry.socket.dev. The proxy resolves the placeholder
   # SOCKET_TOKEN in auth headers via protocol: rest + tls: terminate.
+  # Restricted to read-only (GET) — npm install only reads the registry.
+  # /usr/bin/node is required because npm is a shebang script — OpenShell's
+  # policy engine matches the actual executable (/usr/bin/node), not the
+  # script path (/usr/bin/npm) in argv[0].
   socket_packages:
     name: socket-packages
     endpoints:
@@ -67,11 +71,10 @@ network_policies:
         protocol: rest
         tls: terminate
         enforcement: enforce
-        access: full
+        access: read-only
     binaries:
       - { path: /usr/bin/npm }
       - { path: /usr/bin/node }
-      - { path: /usr/bin/npx }
 
   # --- npm (default registry, when Socket.dev is not configured) ---
   npm_registry:

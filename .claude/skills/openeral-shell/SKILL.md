@@ -23,7 +23,9 @@ echo "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:+(set)}"
 echo "OPENSHELL_SANDBOX=${OPENSHELL_SANDBOX:-0}"
 ```
 
-- If `DATABASE_URL` is not set, **continue** — persistence is optional. Tell the user: "Running without persistence. Set DATABASE_URL to enable it."
+- If `DATABASE_URL` is not set:
+  - **Local path (Step 3a)**: continue without persistence — it's optional locally.
+  - **OpenShell paths (Step 3b/3c)**: stop — `DATABASE_URL` is required for OpenShell sandbox setup. Tell the user to set it.
 - If `ANTHROPIC_API_KEY` is not set, warn but continue.
 
 ### Step 2: Detect environment
@@ -80,11 +82,17 @@ If `/opt/openeral/` doesn't exist:
 which openshell || echo "Install openshell: https://github.com/NVIDIA/OpenShell"
 openshell gateway list 2>/dev/null | grep -q running || openshell gateway start
 openshell provider create --name db --type generic --credential DATABASE_URL 2>/dev/null || true
-# Optional: Socket.dev package scanning
-openshell provider create --name socket --type generic --credential SOCKET_TOKEN 2>/dev/null || true
+
+# Build provider list — socket is only added if SOCKET_TOKEN is set
+PROVIDERS="--provider db --provider claude"
+if [ -n "${SOCKET_TOKEN:-}" ]; then
+  openshell provider create --name socket --type generic --credential SOCKET_TOKEN 2>/dev/null || true
+  PROVIDERS="$PROVIDERS --provider socket"
+fi
+
 openshell sandbox create \
   --from ghcr.io/sandys/openeral/sandbox:just-bash \
-  --provider db --provider claude --provider socket --auto-providers \
+  $PROVIDERS --auto-providers \
   -- /opt/openeral/setup.sh
 ```
 

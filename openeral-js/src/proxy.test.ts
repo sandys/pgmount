@@ -30,7 +30,7 @@ describe('proxy policy (PROXY-PLAN compliance)', () => {
     expect(anthropicSection).toContain('tls: terminate');
   });
 
-  it('Socket.dev endpoint exists with protocol: rest + tls: terminate', () => {
+  it('Socket.dev endpoint has protocol: rest + tls: terminate', () => {
     expect(policy).toContain('registry.socket.dev');
     const socketSection = policy.slice(
       policy.indexOf('registry.socket.dev'),
@@ -39,19 +39,47 @@ describe('proxy policy (PROXY-PLAN compliance)', () => {
     expect(socketSection).toContain('protocol: rest');
     expect(socketSection).toContain('tls: terminate');
   });
+
+  it('Socket.dev endpoint is read-only (not access: full)', () => {
+    const socketSection = policy.slice(
+      policy.indexOf('registry.socket.dev'),
+      policy.indexOf('binaries:', policy.indexOf('registry.socket.dev')),
+    );
+    expect(socketSection).toContain('access: read-only');
+    expect(socketSection).not.toContain('access: full');
+  });
+
+  it('Socket.dev policy allows npm and node (node is the actual exe)', () => {
+    const socketStart = policy.indexOf('socket_packages:');
+    const nextPolicy = policy.indexOf('\n  #', socketStart + 1);
+    const socketBlock = policy.slice(socketStart, nextPolicy > 0 ? nextPolicy : undefined);
+    expect(socketBlock).toContain('/usr/bin/npm');
+    expect(socketBlock).toContain('/usr/bin/node');
+  });
 });
 
 describe('setup.sh Socket.dev integration', () => {
-  it('configures npm registry when SOCKET_TOKEN is present', () => {
+  it('configures Socket.dev registry when SOCKET_TOKEN is present', () => {
     expect(setup).toContain('SOCKET_TOKEN');
     expect(setup).toContain('registry.socket.dev');
-    expect(setup).toContain('npm config set registry');
     expect(setup).toContain('_authToken');
   });
 
+  it('uses a separate openeral-managed file, not the user .npmrc', () => {
+    // Must NOT write to /home/agent/.npmrc (user's file)
+    expect(setup).not.toContain('/home/agent/.npmrc');
+    // Must use a temp/openeral-owned file
+    expect(setup).toMatch(/openeral-npmrc|OPENERAL_NPMRC/);
+    // Must set NPM_CONFIG_USERCONFIG to point npm at the openeral file
+    expect(setup).toContain('NPM_CONFIG_USERCONFIG');
+  });
+
+  it('does not delete any file in /home/agent', () => {
+    expect(setup).not.toMatch(/rm.*\/home\/agent/);
+  });
+
   it('does not hardcode the SOCKET_TOKEN value', () => {
-    // Must reference $SOCKET_TOKEN (env var), not a literal token
-    expect(setup).toContain('"$SOCKET_TOKEN"');
+    expect(setup).toContain('${SOCKET_TOKEN}');
     expect(setup).not.toMatch(/sock_[a-zA-Z0-9]/);
   });
 

@@ -69,10 +69,18 @@ node -e "
 # Configure Socket.dev registry if SOCKET_TOKEN provider is available.
 # The token value is a placeholder (openshell:resolve:env:SOCKET_TOKEN) —
 # the OpenShell proxy resolves it to the real token in auth headers.
+#
+# Uses a separate openeral-managed file (/tmp/openeral-npmrc), NOT the user's
+# ~/.npmrc, to avoid clobbering user config. Passed to npm via NPM_CONFIG_USERCONFIG.
+OPENERAL_NPMRC=/tmp/openeral-npmrc
+rm -f "$OPENERAL_NPMRC"
 if [ -n "${SOCKET_TOKEN:-}" ]; then
   echo "setup.sh: configuring npm to use Socket.dev registry..."
-  npm config set registry https://registry.socket.dev/npm/
-  npm config set //registry.socket.dev/npm/:_authToken "$SOCKET_TOKEN"
+  cat > "$OPENERAL_NPMRC" <<NPMRC
+registry=https://registry.socket.dev/npm/
+//registry.socket.dev/npm/:_authToken=${SOCKET_TOKEN}
+NPMRC
+  export NPM_CONFIG_USERCONFIG="$OPENERAL_NPMRC"
 fi
 
 echo "setup.sh: starting openeral-bash daemon..."
