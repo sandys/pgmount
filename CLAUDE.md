@@ -1,65 +1,62 @@
 # CLAUDE.md
 
-For **using** openeral without developing it, see `sandboxes/openeral/README.md`.
-
 ## Build & Test
 
-**ALL builds, tests, and linting MUST run inside the Docker dev container.** Never install Rust or build on the host.
-
 ```bash
-# Start the environment (if not already running)
-docker compose up -d
+cd openeral-js
+pnpm install && pnpm build
+pnpm check                    # typecheck + 29 lints + 63 unit tests
 
-# Build
-docker compose exec dev cargo build
+# Integration (requires PostgreSQL)
+DATABASE_URL='...' node test-integration.mjs
 
-# Run tests
-docker compose exec dev cargo test -p openeral-core
+# Docker image verification (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_sandbox_e2e.sh
 
-# Run FUSE mount integration tests
-docker compose exec -e PGPASSWORD=pgmount dev bash tests/test_fuse_mount.sh
+# Setup.sh flow inside container (requires Docker + PostgreSQL)
+DATABASE_URL='...' bash ../tests/test_setup_e2e.sh
 
-# Lint
-docker compose exec dev cargo clippy
-
-# Format check
-docker compose exec dev cargo fmt -- --check
+# Real Claude Code persistence (requires PostgreSQL + ANTHROPIC_API_KEY)
+DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh
 ```
-
-**PostgreSQL is available inside the dev container at:** `host=postgres user=pgmount password=pgmount dbname=testdb`
-
-Do NOT use `cargo build` or `cargo test` directly on the host. The dev container has the correct Rust version, FUSE libraries, and network access to the PostgreSQL container.
 
 ## Project Structure
 
-- `crates/openeral/` — binary crate (thin CLI entry point)
-- `crates/openeral-core/` — library crate (all logic: FUSE filesystem, DB queries, CLI commands)
-- `crates/openeral-core/migrations/` — SQL migrations (V1–V4), managed by refinery
-- `sandboxes/openeral/` — current OpenShell sandbox image (upstream base sandbox, supervisor-managed via `/etc/fstab`)
-- `vendor/openshell/` — vendored OpenShell fork used to build the custom cluster and gateway images
-- `.github/workflows/publish-images.yml` — atomically publishes `openeral/{cluster,gateway,sandbox}`
-- `tests/test_fuse_mount.sh` — FUSE mount integration tests (bash)
-
-## Two Filesystems
-
-1. **PgmountFilesystem** (`fs/mod.rs`) — read-only mount of database content. Uses `NodeIdentity` enum for inode mapping.
-2. **WorkspaceFilesystem** (`fs/workspace.rs`) — read-write mount for agent state. Uses path-based inode table. Files stored in `_openeral.workspace_files`.
+- `openeral-js/` — TypeScript package
+  - `src/cli.ts` — `npx openeral` entry point (persistence optional)
+  - `src/sync.ts` — PostgreSQL ↔ real filesystem sync
+  - `src/pg-fs/` — PgFs: read-only IFileSystem backed by SQL queries
+  - `src/workspace-fs/` — WorkspaceFs: read-write IFileSystem backed by workspace_files
+  - `src/db/` — SQL queries, migrations, pool, types
+  - `src/safety.ts` — command safety analysis via just-bash parse() AST
+  - `src/shell.ts` — createOpeneralShell(), createToolHandler()
+  - `src/index.ts` — public API
+  - `lint.mjs` — 29 structural lint rules
+- `sandboxes/openeral/` — OpenShell sandbox image (stock base, no FUSE)
+  - `Dockerfile` — Node.js + openeral-js on stock OpenShell base
+  - `openeral-bash.mjs` — daemon/client bridge for custom agents
+  - `setup.sh` — sandbox entry point
+  - `policy.yaml` — network policy
+- `crates/` — original Rust implementation (reference, not used)
 
 ## Conventions
 
-- All FUSE callbacks bridge sync→async via `rt.block_on()`
-- SQL queries use `quote_ident()` for identifiers and parameterized queries for values
-- All column values cast to `::text` in SQL to avoid Rust type-mapping issues
-- Errors map to `FsError` which converts to `fuser::Errno`
-- New node types: add to `NodeIdentity` enum, create handler in `fs/nodes/`, wire into dispatch functions
+- Persistence is optional — CLI works without DATABASE_URL (local-only mode)
+- IFileSystem implementations are path-based (no inodes)
+- `parsePath()` returns a `PgNode` discriminated union
+- SQL queries use `quoteIdent()` for identifiers, `$N` params for values, `::text` casts
+- PgFs throws EROFS on all write methods
+- WorkspaceFs receives complete content per writeFile() — no write-back buffering
+- Command safety: just-bash parse() AST walk with regex fallback
+- `pg` command: SQL with parens or quotes must be double-quoted
 
 ## Hard Rules
 
-- **Never fix forward from the middle.** When a mistake is found in a build, setup, or integration flow, stop immediately and restart the entire flow from scratch. Do not patch, work around, or continue from a broken state. This project is being sold — every artifact must be clean and correct from a full rebuild.
-- **OpenShell verification must use the supervisor path.** The supported sandbox flow is the custom `openeral/cluster` image plus the published `openeral/sandbox` image. Do not validate OpenShell using `openeral-start.sh` or a container `ENTRYPOINT`; the supervisor overrides the command and mounts FUSE from `/etc/fstab`.
-- **Never delete, move, or overwrite user files without explicit permission.** This includes files that appear sensitive, secret-bearing, incorrect, or security-critical.
-- **If a file appears risky, stop and ask first.** Report the concern clearly, but do not remove, rewrite, chmod, or hide the file on your own.
+- **Never fix forward from the middle.** Stop and restart the flow from scratch.
+- **Never delete, move, or overwrite user files without explicit permission.**
+- **If a file appears risky, stop and ask first.**
+- **Never hardcode credentials, connection strings, or secrets into files.** Always read from environment variables at runtime.
 
 ## Commit Style
 
-Look at `git log --oneline` for the existing style. Commits are descriptive, imperative mood, with details in the body when needed.
+Descriptive, imperative mood. Look at `git log --oneline` for examples.

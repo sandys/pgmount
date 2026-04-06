@@ -1,59 +1,40 @@
-# Stage 1: Build openeral from source
-FROM rust:1.85-bookworm AS builder
+# OpenEral sandbox — persistent /home/agent + read-only /db via just-bash
+#
+# Uses stock OpenShell (no custom cluster or gateway images needed).
+# All filesystem virtualization happens in userspace via openeral-js.
 
-RUN apt-get update && apt-get install -y \
-    libfuse3-dev \
-    fuse3 \
-    pkg-config \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
-
-RUN cargo build --release --bin openeral \
-    && strip /build/target/release/openeral
-
-# Stage 2: Runtime image extending the upstream OpenShell base sandbox
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 USER root
 
-# Install only runtime dependencies (no -dev packages)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fuse3 \
-    libpq5 \
+# Node.js 22 LTS via NodeSource (apt nodejs conflicts with npm on Ubuntu Noble)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy openeral binary
-COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
+# Install openeral-js: install all deps (including devDeps for tsc), build, then prune
+COPY openeral-js/ /opt/openeral/
+RUN cd /opt/openeral && npm install && npm run build && npm prune --omit=dev
 
-# Allow non-root FUSE mounts
-RUN echo "user_allow_other" >> /etc/fuse.conf
+# openeral-bash: drop-in bash replacement routed through just-bash
+COPY sandboxes/openeral/openeral-bash.mjs /opt/openeral/openeral-bash.mjs
+RUN chmod +x /opt/openeral/openeral-bash.mjs \
+    && ln -sf /opt/openeral/openeral-bash.mjs /usr/local/bin/openeral-bash
 
-# Create mount points and declare supervisor-managed FUSE mounts.
-# OpenShell overrides the container command to run `openshell-sandbox`, which
-# reads `/etc/fstab` and mounts `fuse.*` entries marked `noauto` before
-# spawning the sandboxed child process.
-RUN mkdir -p /db /home/agent && \
-    printf '%s\n' \
-      'env /db fuse.openeral ro,allow_other,noauto 0 0' \
-      'env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0' \
-      >> /etc/fstab
+# Rename real bash so openeral-bash can fall back to it for interactive use
+RUN cp /bin/bash /bin/bash.real
 
-# StringCost integration: allow Claude to reach the StringCost proxy for
-# cost-tracked API calls when ANTHROPIC_BASE_URL points at StringCost.
-RUN cat >> /etc/openshell/policy.yaml <<'POLICY'
+# Setup script (entry point for sandbox create)
+COPY sandboxes/openeral/setup.sh /opt/openeral/setup.sh
+RUN chmod +x /opt/openeral/setup.sh
 
-  stringcost:
-    name: stringcost
-    endpoints:
-      - { host: proxy.stringcost.com, port: 443 }
-    binaries:
-      - { path: /usr/local/bin/claude }
-      - { path: /usr/bin/node }
-POLICY
+# Override the upstream base policy
+COPY sandboxes/openeral/policy.yaml /etc/openshell/policy.yaml
 
-# Ship project-local skills into the sandbox home.
+# Skills for Claude Code
 COPY .claude/skills/ /sandbox/.skills/
+
+# Workspace directory — must be owned by sandbox user so setup.sh can write .npmrc
+RUN mkdir -p /home/agent && chown sandbox:sandbox /home/agent

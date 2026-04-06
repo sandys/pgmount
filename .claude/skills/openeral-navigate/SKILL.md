@@ -1,57 +1,64 @@
 ---
 name: openeral-navigate
-description: Use /db for read-only database context while keeping Claude state under /home/agent
+description: Explore /db and manage files in /home/agent — available when running with DATABASE_URL via just-bash or OpenShell
 ---
 
 # OpenEral Navigate
 
-This skill is for the database side of the Claude Code sandbox.
+When running with `DATABASE_URL` set, two virtual mounts are available:
 
-The priority order is:
+- `/db` — read-only database (schemas, tables, rows as files)
+- `/home/agent` — read-write persistent workspace
 
-1. keep Claude running with `HOME=/home/agent`
-2. use `/db` only when Claude needs live database context
+These are available via the `pg` command (Claude Code path) or as virtual directories (custom agent path with just-bash).
 
-## First Checks
-
-```bash
-grep -E ' /db | /home/agent ' /proc/mounts
-```
-
-If either mount is missing, stop treating it as a data-navigation problem. It is an infrastructure problem.
-
-## Fast Database Reads
-
-Use `/db` like this:
+## Database queries (Claude Code + custom agents)
 
 ```bash
-ls /db
-ls /db/public
-cat /db/public/users/.info/columns.json
-cat /db/public/users/.info/count
-cat /db/public/users/.filter/id/42/42/row.json
-ls /db/public/users/.order/created_at/desc/
+pg "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+pg "SELECT * FROM public.users LIMIT 5"
+pg "\d public.users"
 ```
 
-Use `.filter/` for targeted lookups. It is the cheapest path for Claude-driven database inspection.
+## /db virtual filesystem (custom agent path only)
 
-## Workspace Rule
-
-Any notes, scripts, or generated files that Claude should keep must go under `/home/agent`.
+When using `createOpeneralShell()` with just-bash, the database is browsable as files:
 
 ```bash
-mkdir -p /home/agent/work
-printf 'notes\n' > /home/agent/work/todo.txt
+ls /db                                          # schemas
+ls /db/public                                   # tables
+cat /db/public/users/.info/columns.json         # column metadata
+cat /db/public/users/.info/schema.sql           # CREATE TABLE DDL
+cat /db/public/users/.info/count                # row count
+cat /db/public/users/page_1/1/row.json          # row as JSON
+ls /db/public/users/.filter/status/active/      # filtered rows
+ls /db/public/users/.order/created_at/desc/     # sorted rows
 ```
 
-If a tool stores state under `$HOME`, run it with:
+Prefer `.filter/` and `.info/count` over scanning page trees.
+
+## Workspace
+
+Files written to `$HOME` persist to PostgreSQL (when `DATABASE_URL` is set):
 
 ```bash
-HOME=/home/agent <tool>
+mkdir -p $HOME/work
+echo "notes" > $HOME/work/todo.txt
 ```
 
-## What Not To Do
+## Package management (OpenShell with SOCKET_TOKEN)
 
-- do not write to `/db`
-- do not assume `/sandbox` is durable
-- do not scan huge tables blindly when `.filter/` or `.info/count` will answer the question
+When running in OpenShell with `--provider socket`, npm routes through Socket.dev:
+
+```bash
+npm install express    # traffic goes to registry.socket.dev, scanned before install
+```
+
+The `SOCKET_TOKEN` credential is injected by the OpenShell proxy — the sandbox only sees a placeholder.
+
+## Rules
+
+- `/db` is read-only — writes throw EROFS
+- `/tmp` is ephemeral
+- Without `DATABASE_URL`, only local temp storage (no persistence, no `pg`, no `/db`)
+- Credentials (ANTHROPIC_API_KEY, SOCKET_TOKEN) are placeholders in the sandbox — resolved by the OpenShell proxy at egress
