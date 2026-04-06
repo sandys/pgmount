@@ -25,7 +25,7 @@ DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
   - `src/safety.ts` — command safety analysis via just-bash parse() AST
   - `src/shell.ts` — createOpeneralShell(), createToolHandler()
   - `src/index.ts` — public API
-  - `lint.mjs` — 20 structural lint rules
+  - `lint.mjs` — 24 structural lint rules
 - `sandboxes/openeral/` — OpenShell sandbox image (stock base, no FUSE)
   - `Dockerfile` — Node.js + openeral-js on stock OpenShell base
   - `openeral-bash.mjs` — daemon/client bridge for custom agents

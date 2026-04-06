@@ -38,14 +38,14 @@ sandboxes/openeral/
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                                      # typecheck + 20 lints + unit tests
+pnpm check                                      # typecheck + 24 lints + unit tests
 DATABASE_URL='...' node test-integration.mjs     # 34 tests against live PostgreSQL
 DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs  # 45+ tests, 3 sessions
 ```
 
-## Structural Lints (lint.mjs — 20 rules)
+## Structural Lints (lint.mjs — 24 rules)
 
-Key rules: imports resolve, exports match, just-bash >=2.x, PgFs throws EROFS, no write-back buffering, no FUSE in Dockerfile, no hardcoded credentials, sync persists deletions, sync preserves modes, exclude uses exact matching, syncToFs prunes stale files, syncToFs prunes before creating, pruneLocal handles type conflicts, README includes build steps.
+Key rules: imports resolve, exports match, just-bash >=2.x, PgFs throws EROFS, no write-back buffering, no FUSE in Dockerfile, no hardcoded credentials, sync persists deletions, sync preserves modes, exclude uses exact matching, syncToFs prunes stale files, syncToFs prunes before creating, pruneLocal handles type conflicts, README includes build steps, migrations use advisory lock, skill checks node_modules, no fork-specific policy fields (secret_injection/egress_via), Socket.dev endpoint has TLS terminate.
 
 ## Conventions
 

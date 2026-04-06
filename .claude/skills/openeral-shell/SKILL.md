@@ -80,9 +80,11 @@ If `/opt/openeral/` doesn't exist:
 which openshell || echo "Install openshell: https://github.com/NVIDIA/OpenShell"
 openshell gateway list 2>/dev/null | grep -q running || openshell gateway start
 openshell provider create --name db --type generic --credential DATABASE_URL 2>/dev/null || true
+# Optional: Socket.dev package scanning
+openshell provider create --name socket --type generic --credential SOCKET_TOKEN 2>/dev/null || true
 openshell sandbox create \
   --from ghcr.io/sandys/openeral/sandbox:just-bash \
-  --provider db --provider claude --auto-providers \
+  --provider db --provider claude --provider socket --auto-providers \
   -- /opt/openeral/setup.sh
 ```
 
@@ -91,3 +93,5 @@ openshell sandbox create \
 - Claude Code starts with `HOME` pointing to an isolated workspace
 - Without `DATABASE_URL`: local temp home, no persistence, no `pg` command
 - With `DATABASE_URL`: files sync to PostgreSQL, `pg` command available, files survive across sessions
+- With `SOCKET_TOKEN` (OpenShell): npm routes through Socket.dev with credential injection
+- Credential injection: API keys stay as placeholders in the sandbox; the OpenShell proxy resolves them at egress

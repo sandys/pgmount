@@ -73,6 +73,8 @@ npm traffic routes through `registry.socket.dev` with credential injection via t
 - **Persistent home** (with `DATABASE_URL`) — files survive across sessions, backed by PostgreSQL
 - **Database access** (with `DATABASE_URL`) — `pg "SELECT * FROM users LIMIT 5"` from Claude's bash
 - **Automatic sync** (with `DATABASE_URL`) — file changes sync to PostgreSQL in the background
+- **Package scanning** (with `SOCKET_TOKEN` via OpenShell) — npm routes through Socket.dev
+- **Credential injection** (via OpenShell) — API keys never reach the sandbox; the proxy resolves placeholders at egress
 - **Session isolation** — different `OPENERAL_WORKSPACE_ID` = different workspace
 
 ## Persistence (requires DATABASE_URL)
@@ -171,7 +173,7 @@ openeral-js/                  # TypeScript package
   src/workspace-fs/           # Read-write /home/agent filesystem
   src/db/                     # SQL queries, migrations
   src/safety.ts               # Command safety analysis
-  lint.mjs                    # 20 structural lint rules
+  lint.mjs                    # 24 structural lint rules
 
 sandboxes/openeral/           # OpenShell sandbox image
   Dockerfile                  # Stock base + Node.js + openeral-js
