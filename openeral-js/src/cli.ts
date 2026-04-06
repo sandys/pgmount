@@ -19,6 +19,25 @@
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+
+function writePgHelper(path: string): void {
+  // pg helper reads DATABASE_URL from the environment at runtime.
+  // Never hardcode credentials — rely on env propagation from OpenShell providers.
+  const script = `#!/bin/bash
+# pg — query the database from Claude Code
+# Usage: pg "SELECT * FROM public.users LIMIT 5"
+if [ -z "$DATABASE_URL" ]; then
+  echo "pg: DATABASE_URL is not set" >&2; exit 1
+fi
+if command -v psql >/dev/null 2>&1; then
+  exec psql "$DATABASE_URL" -c "$*"
+else
+  exec node -e 'const p=require("pg"),o=new p.Pool({connectionString:process.env.DATABASE_URL});o.query(process.argv[1]).then(r=>{console.log(JSON.stringify(r.rows,null,2));o.end()}).catch(e=>{console.error(e.message);process.exit(1)})' "$*"
+fi
+`;
+  writeFileSync(path, script);
+  chmodSync(path, 0o755);
+}
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { createPool } from './db/pool.js';
@@ -88,23 +107,9 @@ async function main() {
   // --- Write pg helper ---
   const pgHelper = join(homeDir, '.local', 'bin', 'pg');
   mkdirSync(join(homeDir, '.local', 'bin'), { recursive: true });
-  writeFileSync(pgHelper, `#!/bin/bash
-# pg — query the database from Claude Code
-# Usage: pg "SELECT * FROM public.users LIMIT 5"
-if command -v psql >/dev/null 2>&1; then
-  exec psql "$DATABASE_URL" -c "$*"
-else
-  exec node -e "
-    const pg = require('pg');
-    const pool = new pg.Pool({connectionString: process.env.DATABASE_URL});
-    pool.query(process.argv[1]).then(r => {
-      console.log(JSON.stringify(r.rows, null, 2));
-      pool.end();
-    }).catch(e => { console.error(e.message); process.exit(1); });
-  " "$*"
-fi
-`);
-  chmodSync(pgHelper, 0o755);
+  // Bake the connection string directly so it works regardless of
+  // whether Claude Code's Bash tool propagates DATABASE_URL.
+  writePgHelper(pgHelper);
 
   // --- Write CLAUDE.md ---
   const claudeMdPath = join(homeDir, 'CLAUDE.md');

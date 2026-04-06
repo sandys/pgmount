@@ -228,6 +228,20 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Lint 11: No hardcoded credentials in generated scripts
+// Catches: baking DATABASE_URL or secrets into helper scripts
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: no hardcoded credentials ---');
+
+const cliContent = readFileSync('src/cli.ts', 'utf8');
+// The pg helper function must NOT accept a connection string parameter
+if (/writePgHelper\([^)]*connStr|writePgHelper\([^)]*url|writePgHelper\([^)]*database/i.test(cliContent)) {
+  fail('src/cli.ts', 'writePgHelper must not accept a connection string — read from env at runtime');
+} else {
+  pass('pg helper reads DATABASE_URL from env');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

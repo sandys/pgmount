@@ -46,6 +46,7 @@ DATABASE_URL='...' ANTHROPIC_API_KEY='...' node test-e2e-claude.mjs
 - **Never fix forward from the middle.** Stop and restart the flow from scratch.
 - **Never delete, move, or overwrite user files without explicit permission.**
 - **If a file appears risky, stop and ask first.**
+- **Never hardcode credentials, connection strings, or secrets into files.** Always read from environment variables at runtime. This is critical for OpenShell's compliance model — providers inject credentials via env vars, and baking them into scripts bypasses the boundary secret injection path and leaks secrets to disk.
 
 ## Commit Style
 
