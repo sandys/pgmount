@@ -281,6 +281,56 @@ for (const f of ['../sandboxes/openeral/setup.sh', '../sandboxes/openeral/opener
 pass('sandbox scripts have no hardcoded credentials');
 
 // ---------------------------------------------------------------------------
+// Lint 14: syncFromFs must delete stale DB rows (persists deletions)
+// Catches: sync that only upserts but never removes deleted files
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: sync persists deletions ---');
+
+const syncContent = readFileSync('src/sync.ts', 'utf8');
+if (!syncContent.includes('seenPaths') || !syncContent.includes('DELETE FROM _openeral.workspace_files')) {
+  fail('src/sync.ts', 'syncFromFs must track seen paths and delete stale DB rows');
+} else {
+  pass('syncFromFs persists deletions');
+}
+
+// ---------------------------------------------------------------------------
+// Lint 15: syncFromFs must use real file modes, not hardcoded
+// Catches: hardcoding 0o40755/0o100644 instead of reading stat().mode
+// ---------------------------------------------------------------------------
+console.log('\n--- Lint: sync preserves file modes ---');
+
+// Check that walkDir INSERT statements use st.mode, not literal modes
+// Only check the walkDir function body itself (ends at closing brace before root insert)
+const walkDirStart = syncContent.indexOf('async function walkDir');
+const walkDirEnd = syncContent.indexOf('// Ensure root exists');
+const walkDirBody = walkDirEnd > walkDirStart
+  ? syncContent.slice(walkDirStart, walkDirEnd)
+  : syncContent.slice(walkDirStart);
+const walkDirInserts = walkDirBody.match(/INSERT INTO[\s\S]*?\]/g) || [];
+let hardcodedMode = false;
+for (const stmt of walkDirInserts) {
+  if (/0o40755|0o100644/.test(stmt)) {
+    hardcodedMode = true;
+    fail('src/sync.ts', 'walkDir INSERT uses hardcoded mode instead of st.mode');
+    break;
+  }
+}
+if (!hardcodedMode) {
+  pass('syncFromFs uses st.mode from filesystem');
+}
+
+// Check that syncToFs applies chmod
+const syncToFsSection = syncContent.slice(
+  syncContent.indexOf('export async function syncToFs'),
+  syncContent.indexOf('export async function syncFromFs'),
+);
+if (!syncToFsSection.includes('chmodSync') || !syncToFsSection.includes('row.mode & 0o7777')) {
+  fail('src/sync.ts', 'syncToFs must chmodSync with stored mode');
+} else {
+  pass('syncToFs applies stored modes');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

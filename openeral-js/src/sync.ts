@@ -6,8 +6,8 @@
  * watchAndSync: continuous background sync via fs.watch
  */
 
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, unlinkSync, rmdirSync, watch } from 'node:fs';
-import { join, relative, dirname, resolve } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, chmodSync, existsSync, watch } from 'node:fs';
+import { join, dirname } from 'node:path';
 import type pg from 'pg';
 
 function nowNs(): bigint {
@@ -16,7 +16,7 @@ function nowNs(): bigint {
 
 /**
  * Dump all workspace_files rows to a real directory.
- * Creates directories and writes file content preserving paths.
+ * Creates directories and writes file content, preserving stored modes.
  */
 export async function syncToFs(
   pool: pg.Pool,
@@ -33,11 +33,12 @@ export async function syncToFs(
 
   // Create directories first (sorted by path ensures parents before children)
   for (const row of rows) {
+    if (!row.is_dir) continue;
     const fullPath = join(targetDir, row.path);
-    if (row.is_dir) {
-      mkdirSync(fullPath, { recursive: true });
-      count++;
-    }
+    mkdirSync(fullPath, { recursive: true });
+    // Apply stored mode (strip file-type bits, keep permission bits)
+    try { chmodSync(fullPath, row.mode & 0o7777); } catch {}
+    count++;
   }
 
   // Then write files
@@ -47,6 +48,8 @@ export async function syncToFs(
     mkdirSync(dirname(fullPath), { recursive: true });
     const content = row.content ?? Buffer.alloc(0);
     writeFileSync(fullPath, content);
+    // Apply stored mode (strip file-type bits, keep permission bits)
+    try { chmodSync(fullPath, row.mode & 0o7777); } catch {}
     count++;
   }
 
@@ -55,6 +58,7 @@ export async function syncToFs(
 
 /**
  * Scan a real directory and upsert all files into workspace_files.
+ * Deletes DB rows for files that no longer exist on disk.
  */
 export async function syncFromFs(
   pool: pg.Pool,
@@ -63,6 +67,7 @@ export async function syncFromFs(
   opts?: { exclude?: RegExp },
 ): Promise<number> {
   const exclude = opts?.exclude ?? /node_modules|\.git/;
+  const seenPaths = new Set<string>(['/']);
   let count = 0;
 
   async function walkDir(dirPath: string, dbParent: string): Promise<void> {
@@ -87,14 +92,15 @@ export async function syncFromFs(
       }
 
       const now = nowNs();
+      seenPaths.add(dbPath);
 
       if (st.isDirectory()) {
         await pool.query(
           `INSERT INTO _openeral.workspace_files
            (workspace_id, path, parent_path, name, is_dir, content, mode, size, mtime_ns, ctime_ns, atime_ns, nlink, uid, gid)
            VALUES ($1, $2, $3, $4, true, NULL, $5, 0, $6, $6, $6, 2, 1000, 1000)
-           ON CONFLICT (workspace_id, path) DO UPDATE SET mtime_ns = $6`,
-          [workspaceId, dbPath, dbParent, name, 0o40755, now.toString()],
+           ON CONFLICT (workspace_id, path) DO UPDATE SET mode = $5, mtime_ns = $6`,
+          [workspaceId, dbPath, dbParent, name, st.mode, now.toString()],
         );
         count++;
         await walkDir(fullPath, dbPath);
@@ -104,8 +110,8 @@ export async function syncFromFs(
           `INSERT INTO _openeral.workspace_files
            (workspace_id, path, parent_path, name, is_dir, content, mode, size, mtime_ns, ctime_ns, atime_ns, nlink, uid, gid)
            VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $8, $8, 1, 1000, 1000)
-           ON CONFLICT (workspace_id, path) DO UPDATE SET content = $5, size = $7, mtime_ns = $8`,
-          [workspaceId, dbPath, dbParent, name, content, 0o100644, st.size, now.toString()],
+           ON CONFLICT (workspace_id, path) DO UPDATE SET content = $5, mode = $6, size = $7, mtime_ns = $8`,
+          [workspaceId, dbPath, dbParent, name, content, st.mode, st.size, now.toString()],
         );
         count++;
       }
@@ -123,6 +129,21 @@ export async function syncFromFs(
   );
 
   await walkDir(sourceDir, '/');
+
+  // Delete DB rows for files that no longer exist on disk
+  const { rows: dbRows } = await pool.query(
+    `SELECT path FROM _openeral.workspace_files WHERE workspace_id = $1 AND path != '/'`,
+    [workspaceId],
+  );
+  for (const row of dbRows) {
+    if (!seenPaths.has(row.path)) {
+      await pool.query(
+        `DELETE FROM _openeral.workspace_files WHERE workspace_id = $1 AND path = $2`,
+        [workspaceId, row.path],
+      );
+    }
+  }
+
   return count;
 }
 
