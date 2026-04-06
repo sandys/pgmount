@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // We can't import writePgHelper directly (it's not exported),
 // so we test by running the CLI's pg helper generation logic inline.
@@ -88,5 +92,19 @@ echo "connected to: $DATABASE_URL"
     expect(out.trim()).toBe('connected to: test://db');
 
     rmSync(tmpDir, { recursive: true });
+  });
+});
+
+describe('openeral-shell skill bootstrap', () => {
+  it('checks both dist/ and node_modules/ before launching', () => {
+    const skillPath = join(__dirname, '../../.claude/skills/openeral-shell/SKILL.md');
+    const skill = readFileSync(skillPath, 'utf8');
+
+    // Must check node_modules alongside dist
+    expect(skill).toContain('node_modules');
+    expect(skill).toContain('dist');
+
+    // The check line must be a conjunction (&&), not just dist alone
+    expect(skill).toMatch(/\[ -d dist \].*&&.*\[ -d node_modules \]/);
   });
 });
