@@ -32,6 +32,7 @@ const KNOWN_SUBCOMMANDS: &[&str] = &[
     "list",
     "version",
     "workspace",
+    "launch",
     "help",
 ];
 

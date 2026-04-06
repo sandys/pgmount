@@ -35,8 +35,6 @@ OpenEral FUSE support uses three custom runtime images:
   - requests the FUSE device resource
 - `sandbox`
   - contains `openeral`, `fuse3`, and `/etc/fstab`
-  - installs this repo's `sandboxes/openeral/policy.yaml` as
-    `/etc/openshell/policy.yaml`
 
 Only two refs are user-facing:
 
@@ -54,40 +52,6 @@ Unsupported combinations:
 - upstream `cluster` + openeral `sandbox`
 
 The vendored OpenShell source in this repo exists to build the custom `cluster` and `gateway` images. It is not the supported source of the user-facing CLI.
-
-## Sandbox Policy Is Image-Owned
-
-The openeral sandbox image ships its own full OpenShell policy file:
-
-```text
-/etc/openshell/policy.yaml
-```
-
-This is copied from:
-
-```text
-sandboxes/openeral/policy.yaml
-```
-
-That file is not just a small addon. It is the authoritative sandbox policy for
-the openeral image.
-
-Why the override exists:
-
-- the upstream base sandbox policy was not enough for the current
-  placeholder-based Claude auth path
-- openeral needs the child process to keep seeing
-  `openshell:resolve:env:ANTHROPIC_API_KEY`
-- the proxy then needs an explicit secret-injection rule to rewrite that
-  placeholder into the outbound `x-api-key` header for Anthropic
-
-Today the image policy contains two important Anthropic-related rules:
-
-- `claude_code`
-  - for the normal Claude Code runtime path
-  - secret injection on `x-api-key`
-- `anthropic_secret_test`
-  - for direct `curl`-based live verification with `GET /v1/models`
 
 ## Optional Package Proxy
 
@@ -124,41 +88,62 @@ Observed runtime caveat:
   `socketdev/socket-firewall --service`; without it, the service exits before the
   OpenShell sandbox can use it
 
-## Boundary Secret Injection
+## Quick Start (One Command)
 
-OpenEral also supports endpoint-scoped boundary secret injection inside the same
-built-in OpenShell sandbox proxy.
+Set three environment variables, then run a single command:
 
-- the child process sees placeholder values such as
-  `openshell:resolve:env:OPENAI_API_KEY`
-- the proxy rewrites those placeholders to real provider-env secrets only on
-  matching endpoints
-- v1 supports header and query-string rewriting on inspected REST traffic
+```bash
+export DATABASE_URL='host=<host> user=<user> password=<password> dbname=<dbname>'
+export ANTHROPIC_API_KEY='<your-anthropic-api-key>'
+export STRINGCOST_API_KEY='<your-stringcost-api-key>'   # optional, enables cost tracking
 
-Required endpoint shape:
+openeral launch --image <sandbox-image-ref>
+```
 
-- `protocol: rest`
-- `tls: terminate`
-- `secret_injection:` rules on the endpoint
+That's it. `openeral launch` handles gateway startup, provider creation,
+StringCost presigning, and sandbox launch automatically.
 
-If an endpoint also uses `egress_via: package_proxy`:
+If `STRINGCOST_API_KEY` is set, all Anthropic traffic is routed through
+StringCost for cost tracking. If it's not set, Claude talks directly to
+Anthropic. Claude picks its own model — no override needed.
 
-- non-secret requests still use the normal package-proxy route
-- secret-bearing requests switch to direct egress after rewrite
-- unauthorized or leaked placeholders are denied
+### Options
 
-Migration note:
+| Flag | Default | Description |
+|---|---|---|
+| `--image` | `$OPENERAL_SANDBOX_IMAGE` | Sandbox image reference (required) |
+| `--gateway` | `openeral` | Gateway name |
+| `--name` | `openeral-sandbox` | Sandbox name |
+| `--no-stringcost` | off | Skip StringCost even if key is set |
+| `--dry-run` | off | Print commands without executing |
 
-- plain `HTTP_PROXY` forward-proxy requests no longer rewrite
-  `openshell:resolve:env:*` placeholders
-- placeholder-based auth must use the CONNECT + REST + TLS-terminate path
+### Preview Mode
 
-Current Anthropic detail:
+See exactly what will run before committing:
 
-- the openeral sandbox policy rewrites `ANTHROPIC_API_KEY` into the
-  `x-api-key` header for Claude traffic to `api.anthropic.com`
-- this is what allows the stock `claude` CLI to run successfully while the
-  child environment still contains only the placeholder value
+```bash
+openeral launch --image <sandbox-image-ref> --dry-run
+```
+
+## Optional StringCost Integration
+
+OpenEral can route all Anthropic API traffic through
+[StringCost](https://github.com/arakoodev/stringcost) for automatic cost
+tracking, billing, and usage metering.
+
+No wrapper scripts, no profile hooks, no inference routing config. `openeral
+launch` handles everything automatically when `STRINGCOST_API_KEY` is set.
+Claude picks its own model — no override.
+
+### How It Works
+
+1. `openeral launch` presigns the Anthropic key via StringCost
+2. Passes the presigned URL as `ANTHROPIC_BASE_URL` to the sandbox
+3. Claude Code sends API requests to StringCost with a placeholder `x-api-key`
+4. The OpenShell proxy rewrites the placeholder header to the real key
+5. StringCost receives the real key, proxies to Anthropic with cost tracking
+
+The sandbox image includes a network policy allowing `proxy.stringcost.com:443`.
 
 ### Local Development
 
@@ -273,36 +258,6 @@ This is the preferred and supported user flow:
 
 The same rule applies in CI: release smoke installs the upstream released `openshell` CLI and drives the published openeral images through that CLI path.
 
-## Live-Proven Checks
-
-The current sandbox image was live-tested with these checks:
-
-### Claude path
-
-```bash
-HOME=/home/agent claude -p 'Reply with READY and nothing else.'
-```
-
-Expected properties during that run:
-
-- `ANTHROPIC_API_KEY=openshell:resolve:env:ANTHROPIC_API_KEY` inside the child
-- Claude returns `READY`
-- `.claude*` rows appear in `_openeral.workspace_files`
-
-### Direct secret-injection path
-
-```bash
-curl -fsS https://api.anthropic.com/v1/models \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H 'anthropic-version: 2023-06-01'
-```
-
-Expected properties during that run:
-
-- `$ANTHROPIC_API_KEY` is still the placeholder value in the child env
-- the request succeeds through the proxy rewrite path
-- the response contains Anthropic model data
-
 ## Database Migrations
 
 `openeral` carries its own embedded PostgreSQL migrations with `refinery`.
@@ -328,8 +283,6 @@ When the sandbox is healthy:
 - `/db` is mounted read-only by `openeral`
 - Claude runs with `HOME=/home/agent`
 - `.claude` files are written into PostgreSQL-backed storage
-- `/etc/openshell/policy.yaml` comes from this repo's sandbox image, not from
-  the upstream base image unchanged
 
 The sandbox image declares these mounts in `/etc/fstab`:
 

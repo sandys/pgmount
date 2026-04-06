@@ -29,11 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy openeral binary
 COPY --from=builder /build/target/release/openeral /usr/local/bin/openeral
 
-# Override the upstream base policy with the openeral sandbox policy so the
-# stock Claude path keeps working with placeholder credentials under boundary
-# secret injection.
-COPY sandboxes/openeral/policy.yaml /etc/openshell/policy.yaml
-
 # Allow non-root FUSE mounts
 RUN echo "user_allow_other" >> /etc/fuse.conf
 
@@ -46,6 +41,19 @@ RUN mkdir -p /db /home/agent && \
       'env /db fuse.openeral ro,allow_other,noauto 0 0' \
       'env#workspace#${OPENSHELL_SANDBOX_ID} /home/agent fuse.openeral rw,allow_other,noauto 0 0' \
       >> /etc/fstab
+
+# StringCost integration: allow Claude to reach the StringCost proxy for
+# cost-tracked API calls when ANTHROPIC_BASE_URL points at StringCost.
+RUN cat >> /etc/openshell/policy.yaml <<'POLICY'
+
+  stringcost:
+    name: stringcost
+    endpoints:
+      - { host: proxy.stringcost.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/node }
+POLICY
 
 # Ship project-local skills into the sandbox home.
 COPY .claude/skills/ /sandbox/.skills/
