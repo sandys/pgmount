@@ -34,7 +34,11 @@ try {
   }
 } catch {}
 
-const DB_URL = process.env.DATABASE_URL || 'postgresql://user:password@172.22.0.2:5432/healthtracker';
+const DB_URL = process.env.DATABASE_URL;
+if (!DB_URL) {
+  console.error('DATABASE_URL required');
+  process.exit(1);
+}
 const API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const WORKSPACE = 'e2e-claude-' + Date.now();
 
