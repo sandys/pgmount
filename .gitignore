@@ -16,3 +16,11 @@ AGENTS.md
 !.claude/skills/openeral-navigate/**
 !.claude/skills/openeral-shell/
 !.claude/skills/openeral-shell/**
+
+# Node
+node_modules/
+dist/
+*.tgz
+
+# Build artifacts
+*.tar
