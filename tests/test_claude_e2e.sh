@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# test_claude_e2e.sh — Runs real Claude Code via npx openeral and verifies
+# test_claude_e2e.sh — Runs real Claude Code via the built openeral bin and verifies
 # end-to-end: persistence across sessions, pg command, file operations.
 #
 # This is the REAL test — not structural, not Docker shape. It launches
@@ -37,12 +37,12 @@ run_claude() {
   DATABASE_URL="$DB_URL" \
   ANTHROPIC_API_KEY="$API_KEY" \
   OPENERAL_WORKSPACE_ID="$WORKSPACE" \
-  node dist/cli.js -- "$@" --dangerously-skip-permissions 2>&1
+  node dist/bin/openeral.js -- "$@" --dangerously-skip-permissions 2>&1
 }
 
 echo ""
 echo "=== Session 1: Write files ==="
-out=$(run_claude -p 'Write the text "e2e-persist-check" to $HOME/persist-test.txt using your Write tool. Then reply with just: WRITTEN')
+out=$(run_claude -p 'Run: printf "%s" "e2e-persist-check" > "$HOME/persist-test.txt" && echo WRITTEN — reply with just the output')
 echo "$out" | tail -5
 if echo "$out" | grep -qi 'WRITTEN\|written\|Done'; then
   pass "session 1: file written"
@@ -77,7 +77,7 @@ rm -rf "/tmp/openeral-$WORKSPACE"
 
 echo ""
 echo "=== Session 2: Read persisted file ==="
-out=$(run_claude -p 'Run: cat $HOME/persist-test.txt — reply with just the content')
+out=$(run_claude -p 'Run: cat "$HOME/persist-test.txt" — reply with just the output')
 echo "$out" | tail -5
 if echo "$out" | grep -q 'e2e-persist-check'; then
   pass "session 2: file persisted from session 1"
@@ -87,7 +87,7 @@ fi
 
 echo ""
 echo "=== Session 2: .claude state persisted ==="
-out=$(run_claude -p 'Run: ls $HOME/.claude/ — reply with just the output')
+out=$(run_claude -p 'Run: ls "$HOME/.claude/" — reply with just the output')
 echo "$out" | tail -5
 if echo "$out" | grep -qi 'settings\|projects'; then
   pass "session 2: .claude/ state persisted"

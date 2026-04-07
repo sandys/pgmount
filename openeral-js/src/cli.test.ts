@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
+import { parseCliArgs } from './cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -106,5 +108,84 @@ describe('openeral-shell skill bootstrap', () => {
 
     // The check line must be a conjunction (&&), not just dist alone
     expect(skill).toMatch(/\[ -d dist \].*&&.*\[ -d node_modules \]/);
+  });
+});
+
+describe('CLI argument parsing', () => {
+  it('parses memory refresh options', () => {
+    const parsed = parseCliArgs([
+      'memory',
+      'refresh',
+      '--workspace', 'mem-ws',
+      '--project-root', '/tmp/project',
+      '--query', 'openshell proxy',
+      '--dry-run',
+      '--no-backup',
+    ]);
+
+    expect(parsed).toEqual({
+      kind: 'memory-refresh',
+      workspaceId: 'mem-ws',
+      projectRoot: '/tmp/project',
+      query: 'openshell proxy',
+      dryRun: true,
+      backup: false,
+    });
+  });
+
+  it('keeps launch mode compatible with Claude args after --', () => {
+    const parsed = parseCliArgs(['--workspace', 'alpha', '--', '-p', 'hello']);
+
+    expect(parsed).toEqual({
+      kind: 'launch',
+      workspaceId: 'alpha',
+      claudeArgs: ['-p', 'hello'],
+    });
+  });
+
+  it('treats --help after -- as a Claude arg, not OpenEral help', () => {
+    const parsed = parseCliArgs(['--', '--help']);
+
+    expect(parsed).toEqual({
+      kind: 'launch',
+      workspaceId: hostname(),
+      claudeArgs: ['--help'],
+    });
+  });
+});
+
+describe('built CLI entrypoint', () => {
+  const binPath = join(__dirname, '../dist/bin/openeral.js');
+
+  it('prints help when run through the built bin path', () => {
+    const out = execFileSync(process.execPath, [binPath, '--help'], {
+      cwd: join(__dirname, '..'),
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+
+    expect(out).toContain('Usage:');
+    expect(out).toContain('openeral memory refresh');
+  });
+
+  it('prints help when the built bin is invoked via a symlinked path', () => {
+    const tmpDir = `/tmp/openeral-bin-symlink-${Date.now()}`;
+    const symlinkPath = join(tmpDir, 'openeral');
+
+    mkdirSync(tmpDir, { recursive: true });
+    symlinkSync(binPath, symlinkPath);
+
+    try {
+      const out = execFileSync(process.execPath, [symlinkPath, '--help'], {
+        cwd: join(__dirname, '..'),
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+
+      expect(out).toContain('Usage:');
+      expect(out).toContain('openeral memory refresh');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

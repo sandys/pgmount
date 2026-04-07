@@ -58,12 +58,12 @@ cd "$OPENERAL_DIR" && [ -d dist ] && [ -d node_modules ] || (pnpm install && pnp
 
 4. Launch:
 ```bash
-cd "$OPENERAL_DIR" && npx openeral
+cd "$OPENERAL_DIR" && node dist/bin/openeral.js
 ```
 
 If the user provided a workspace ID argument:
 ```bash
-cd "$OPENERAL_DIR" && OPENERAL_WORKSPACE_ID="<argument>" npx openeral
+cd "$OPENERAL_DIR" && OPENERAL_WORKSPACE_ID="<argument>" node dist/bin/openeral.js
 ```
 
 ### Step 3b: Inside OpenShell sandbox
@@ -103,3 +103,32 @@ openshell sandbox create \
 - With `DATABASE_URL`: files sync to PostgreSQL, `pg` command available, files survive across sessions
 - With `SOCKET_TOKEN` (OpenShell): npm routes through Socket.dev with credential injection
 - Credential injection: API keys stay as placeholders in the sandbox; the OpenShell proxy resolves them at egress
+
+## Prompting note
+
+When asking Claude to touch files inside the isolated home, prefer `Run:` Bash commands so `$HOME` expands in the sandboxed shell:
+
+```bash
+Run: printf "%s" "hello" > "$HOME/notes.txt" && echo WRITTEN
+Run: cat "$HOME/notes.txt"
+```
+
+Do not assume Claude's Write/Edit tools will expand `$HOME` or `~` correctly for persisted-home checks.
+
+## Refresh memory
+
+To rebuild Claude's native project memory files inside the OpenEral home:
+
+```bash
+cd "${OPENERAL_DIR:-/opt/openeral}" && node dist/bin/openeral.js memory refresh
+```
+
+To focus memory on a specific topic:
+
+```bash
+cd "${OPENERAL_DIR:-/opt/openeral}" && node dist/bin/openeral.js memory refresh --query "openshell proxy and policy"
+```
+
+This rewrites `$HOME/.claude/projects/<project>/memory/*.md` inside the OpenEral home and keeps a backup unless `--no-backup` is used.
+
+For interactive terminal use, `npx openeral` is still fine. For repo-local automation or harnesses, prefer `node dist/bin/openeral.js` after build.
