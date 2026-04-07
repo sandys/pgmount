@@ -138,16 +138,49 @@ The \`pg\` command uses psql if available, otherwise Node.js pg.
     stopWatch = watchAndSync(pool, workspaceId, homeDir);
   }
 
+  // --- StringCost auto-presign ---
+  const claudeEnv: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: homeDir,
+    PATH: `${join(homeDir, '.local', 'bin')}:${process.env.PATH}`,
+  };
+
+  if (process.env.STRINGCOST_API_KEY && process.env.ANTHROPIC_API_KEY) {
+    process.stderr.write('\x1b[2mopeneral: presigning with StringCost...\x1b[0m\n');
+    try {
+      const res = await fetch('https://app.stringcost.com/v1/presign', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.STRINGCOST_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          client_api_key: process.env.ANTHROPIC_API_KEY,
+          path: ['/v1/messages'],
+          expires_in: -1,
+          max_uses: -1,
+          tags: ['openeral'],
+          metadata: { source: 'openeral' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { url?: string };
+      if (data.url) {
+        claudeEnv.ANTHROPIC_BASE_URL = data.url.replace(/\/v1\/.*$/, '');
+        process.stderr.write('\x1b[2mopeneral: StringCost enabled — costs tracked automatically\x1b[0m\n');
+      }
+    } catch (err: any) {
+      process.stderr.write(`\x1b[33mopeneral: StringCost presign failed: ${err.message} — continuing without cost tracking\x1b[0m\n`);
+    }
+  }
+
   // --- Launch Claude Code ---
   process.stderr.write('\x1b[2mopeneral: starting Claude Code\x1b[0m\n\n');
 
   const child = spawn('claude', claudeArgs, {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      PATH: `${join(homeDir, '.local', 'bin')}:${process.env.PATH}`,
-    },
+    env: claudeEnv,
   });
 
   child.on('error', (err: any) => {
