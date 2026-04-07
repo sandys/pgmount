@@ -6,10 +6,11 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "openeral": "dist/cli.js"
+    "openeral": "dist/bin/openeral.js"
   },
   "scripts": {
     "build": "tsc",
+    "pretest": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -5,7 +5,7 @@
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                    # typecheck + 29 lints + 63 unit tests
+pnpm check                    # typecheck + 29 lints + 78 unit tests
 
 # Integration (requires PostgreSQL)
 DATABASE_URL='...' node test-integration.mjs
@@ -23,7 +23,8 @@ DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh
 ## Project Structure
 
 - `openeral-js/` — TypeScript package
-  - `src/cli.ts` — `npx openeral` entry point (persistence optional)
+  - `src/bin/openeral.ts` — executable wrapper for npm/npx and scripts
+  - `src/cli.ts` — CLI parsing and command dispatch
   - `src/sync.ts` — PostgreSQL ↔ real filesystem sync
   - `src/pg-fs/` — PgFs: read-only IFileSystem backed by SQL queries
   - `src/workspace-fs/` — WorkspaceFs: read-write IFileSystem backed by workspace_files
