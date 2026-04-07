@@ -139,15 +139,22 @@ The \`pg\` command uses psql if available, otherwise Node.js pg.
   }
 
   // --- StringCost auto-presign ---
+  // Build Claude environment from allowlist to avoid exposing unnecessary secrets
   const claudeEnv: Record<string, string | undefined> = {
-    ...process.env,
     HOME: homeDir,
     PATH: `${join(homeDir, '.local', 'bin')}:${process.env.PATH}`,
+    // Include required ANTHROPIC_* variables for Claude Code
+    ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
+    ...(process.env.ANTHROPIC_BASE_URL ? { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL } : {}),
   };
 
   if (process.env.STRINGCOST_API_KEY && process.env.ANTHROPIC_API_KEY) {
     process.stderr.write('\x1b[2mopeneral: presigning with StringCost...\x1b[0m\n');
     try {
+      // Use a 10-second timeout to prevent indefinite hangs
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
       const res = await fetch('https://app.stringcost.com/v1/presign', {
         method: 'POST',
         headers: {
@@ -163,7 +170,10 @@ The \`pg\` command uses psql if available, otherwise Node.js pg.
           tags: ['openeral'],
           metadata: { source: 'openeral' },
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+      
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { url?: string };
       if (data.url) {
