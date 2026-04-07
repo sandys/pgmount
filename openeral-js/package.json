@@ -8,6 +8,9 @@
   "bin": {
     "openeral": "dist/bin/openeral.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc",
     "pretest": "npm run build",
