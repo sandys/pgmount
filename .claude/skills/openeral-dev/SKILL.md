@@ -15,7 +15,8 @@ OpenEral gives AI agents an isolated home directory with optional PostgreSQL-bac
 
 ```
 openeral-js/src/
-  cli.ts                      # npx openeral entry point (persistence optional)
+  bin/openeral.ts             # executable wrapper for npm/npx and scripts
+  cli.ts                      # CLI parsing and command dispatch
   sync.ts                     # PostgreSQL ↔ real filesystem sync
   pg-fs/pg-fs.ts              # PgFs: read-only IFileSystem → SQL queries
   pg-fs/path-parser.ts        # parsePath() → PgNode discriminated union
@@ -38,11 +39,12 @@ sandboxes/openeral/
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                                      # typecheck + 29 lints + 63 unit tests
+pnpm check                                      # typecheck + 29 lints + 78 unit tests
 DATABASE_URL='...' node test-integration.mjs     # integration against live PostgreSQL
+DATABASE_URL='...' node test-memory-refresh.mjs  # memory refresh persistence
 DATABASE_URL='...' bash ../tests/test_sandbox_e2e.sh   # Docker image verification
 DATABASE_URL='...' bash ../tests/test_setup_e2e.sh     # setup.sh flow inside container
-DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh  # real Claude Code
+DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh  # real Claude Code via Run:/Bash writes in isolated HOME
 ```
 
 ## Structural Lints (lint.mjs — 29 rules)
@@ -58,6 +60,8 @@ Key rules: imports resolve, exports match, just-bash >=2.x, PgFs throws EROFS, n
 - `pg` command: complex SQL must be double-quoted
 - Command safety: AST walk + regex fallback
 - Persistence is optional — CLI works without DATABASE_URL (local-only mode)
+- For repo-local automation, prefer `node dist/bin/openeral.js` after `pnpm build`
+- Real Claude persistence checks should use `Run:` Bash commands for `$HOME` paths; Claude file tools do not reliably expand shell variables inside the isolated home
 - Never hardcode credentials — always read from environment at runtime
 
 ## Migrations

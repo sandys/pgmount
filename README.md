@@ -26,6 +26,12 @@ npx openeral
 
 That's it. Claude Code launches with an isolated home directory.
 
+For repo-local automation and harnesses after `pnpm build`, prefer the built bin directly:
+
+```bash
+node dist/bin/openeral.js
+```
+
 **Add persistence** by setting `DATABASE_URL` — files then survive across sessions:
 
 ```bash
@@ -34,6 +40,25 @@ npx openeral
 ```
 
 Without `DATABASE_URL`, OpenEral still works — Claude Code runs normally with a local temp home, just without cross-session persistence or database access.
+
+### Refresh Claude memory
+
+Refresh Claude's native auto-memory files inside the OpenEral home:
+
+```bash
+cd openeral/openeral-js
+pnpm install && pnpm build
+
+npx openeral memory refresh
+```
+
+Focus the refresh on a specific topic:
+
+```bash
+npx openeral memory refresh --query "openshell proxy and policy"
+```
+
+This rewrites the native Claude memory directory for the current project under `~/.claude/projects/<project>/memory/` inside the OpenEral home, with a backup in `.openeral-memory-backups/` unless `--no-backup` is set. The ranking is lexical + freshness-based and does not require embeddings or extra providers.
 
 ### Via OpenShell
 
@@ -76,6 +101,7 @@ npm traffic routes through `registry.socket.dev` with credential injection via t
 - **Package scanning** (with `SOCKET_TOKEN` via OpenShell) — npm routes through Socket.dev
 - **Credential injection** (via OpenShell) — API keys never reach the sandbox; the proxy resolves placeholders at egress
 - **Session isolation** — different `OPENERAL_WORKSPACE_ID` = different workspace
+- **Memory refresh** — `openeral memory refresh` rewrites Claude's native project memory files in the isolated home
 
 ## Persistence (requires DATABASE_URL)
 
@@ -83,20 +109,29 @@ Same machine = same workspace (keyed to hostname by default).
 
 ```bash
 # Session 1
-npx openeral -- -p 'Write "hello" to $HOME/notes.txt' --dangerously-skip-permissions
+npx openeral -- -p 'Run: printf "%s" "hello" > "$HOME/notes.txt" && echo WRITTEN' --dangerously-skip-permissions
 
 # Session 2 — file is still there
-npx openeral -- -p 'Run: cat $HOME/notes.txt' --dangerously-skip-permissions
+npx openeral -- -p 'Run: cat "$HOME/notes.txt"' --dangerously-skip-permissions
 # → hello
 ```
 
-Use `$HOME/` (not `~/`) in prompts — Claude Code's file tools resolve `~` to the OS user home.
+Use `Run:` Bash commands when you want shell expansion inside the isolated home. `$HOME` expands correctly in Bash; Claude's file tools do not reliably expand shell variables, and `~` may resolve to the OS user home.
+
+Reliable pattern:
+
+```bash
+npx openeral -- -p 'Run: printf "%s" "hello" > "$HOME/notes.txt" && echo WRITTEN'
+npx openeral -- -p 'Run: cat "$HOME/notes.txt"'
+```
 
 Multiple workspaces:
 
 ```bash
 OPENERAL_WORKSPACE_ID=project-alpha npx openeral
 ```
+
+`--` starts Claude's arguments. `npx openeral -- --help` passes `--help` to Claude, not to OpenEral. Use `npx openeral --help` for OpenEral help.
 
 ## Database access (requires DATABASE_URL)
 
@@ -156,10 +191,11 @@ This path uses [just-bash](https://github.com/vercel-labs/just-bash) with Postgr
 ```bash
 cd openeral-js
 pnpm install && pnpm build
-pnpm check                    # typecheck + 29 lints + 63 unit tests
+pnpm check                    # typecheck + 29 lints + 78 unit tests
 
 # Integration (requires PostgreSQL)
 DATABASE_URL='...' node test-integration.mjs
+DATABASE_URL='...' node test-memory-refresh.mjs
 
 # Docker image verification (requires Docker + PostgreSQL)
 DATABASE_URL='...' bash ../tests/test_sandbox_e2e.sh
@@ -175,7 +211,8 @@ DATABASE_URL='...' ANTHROPIC_API_KEY='...' bash ../tests/test_claude_e2e.sh
 
 ```
 openeral-js/                  # TypeScript package
-  src/cli.ts                  # npx openeral entry point
+  src/bin/openeral.ts         # executable wrapper for npm/npx and scripts
+  src/cli.ts                  # CLI parsing and command dispatch
   src/sync.ts                 # PostgreSQL ↔ filesystem sync
   src/shell.ts                # createOpeneralShell() for custom agents
   src/pg-fs/                  # Read-only /db filesystem
