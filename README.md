@@ -29,8 +29,8 @@ That's it. Claude Code launches with an isolated home directory.
 **Add cost tracking** with [StringCost](https://github.com/arakoodev/stringcost) — just set your StringCost API key:
 
 ```bash
-export ANTHROPIC_API_KEY='sk-ant-...'
-export STRINGCOST_API_KEY='sk-stringcost-...'
+export ANTHROPIC_API_KEY='api key'
+export STRINGCOST_API_KEY='api key'
 
 npx openeral
 ```
