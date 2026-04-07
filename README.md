@@ -26,6 +26,17 @@ npx openeral
 
 That's it. Claude Code launches with an isolated home directory.
 
+**Add cost tracking** with [StringCost](https://github.com/arakoodev/stringcost) — just set your StringCost API key:
+
+```bash
+export ANTHROPIC_API_KEY='sk-ant-...'
+export STRINGCOST_API_KEY='sk-stringcost-...'
+
+npx openeral
+```
+
+When `STRINGCOST_API_KEY` is set, OpenEral automatically presigns with StringCost and routes all API traffic through it. Costs are tracked automatically — no extra configuration needed.
+
 **Add persistence** by setting `DATABASE_URL` — files then survive across sessions:
 
 ```bash
@@ -90,6 +101,7 @@ Claude's API traffic routes through StringCost for cost tracking. The OpenShell 
 ## What you get
 
 - **Isolated home** — Claude Code runs in its own `$HOME`, separate from your system
+- **Cost tracking** (with `STRINGCOST_API_KEY`) — automatic API cost metering via [StringCost](https://github.com/arakoodev/stringcost)
 - **Persistent home** (with `DATABASE_URL`) — files survive across sessions, backed by PostgreSQL
 - **Database access** (with `DATABASE_URL`) — `pg "SELECT * FROM users LIMIT 5"` from Claude's bash
 - **Automatic sync** (with `DATABASE_URL`) — file changes sync to PostgreSQL in the background
@@ -134,8 +146,9 @@ The `pg` command is automatically available — OpenEral writes a `CLAUDE.md` th
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | (optional) | PostgreSQL connection string — enables persistence and `pg` |
 | `ANTHROPIC_API_KEY` | (required for Claude) | Anthropic API key |
+| `STRINGCOST_API_KEY` | (optional) | StringCost API key — enables automatic cost tracking |
+| `DATABASE_URL` | (optional) | PostgreSQL connection string — enables persistence and `pg` |
 | `OPENERAL_WORKSPACE_ID` | hostname | Workspace identifier |
 | `OPENERAL_HOME` | `/tmp/openeral-<id>` | Local workspace directory |
 
