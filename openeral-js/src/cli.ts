@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 
 /**
- * openeral CLI — run Claude Code with persistent PostgreSQL-backed home,
- * or refresh Claude's native memory files inside that persisted home.
+ * openeral CLI — run Claude Code with persistent PostgreSQL-backed home.
  *
  * Usage:
- *   npx openeral
- *   npx openeral -- -p 'hello'
- *   npx openeral --workspace myid
- *   npx openeral memory refresh --query 'openshell proxy'
+ *   npx openeral                      # interactive Claude Code
+ *   npx openeral -- -p 'hello'        # non-interactive
+ *   npx openeral --workspace myid     # custom workspace ID
+ *
+ * Required env:
+ *   DATABASE_URL          PostgreSQL connection string
+ *   ANTHROPIC_API_KEY     Claude API key
+ *
+ * Optional env:
+ *   OPENERAL_WORKSPACE_ID   Workspace ID (default: hostname)
+ *   OPENERAL_HOME           Home directory path (default: /tmp/openeral-<id>)
  */
 
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
-import { join } from 'node:path';
-import { createPool } from './db/pool.js';
-import { runMigrations } from './db/migrations.js';
-import { syncFromFs, syncToFs, watchAndSync } from './sync.js';
-import { refreshClaudeMemory } from './memory/refresh.js';
+import { mkdirSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 
 function writePgHelper(path: string): void {
+  // pg helper reads DATABASE_URL from the environment at runtime.
+  // Never hardcode credentials — rely on env propagation from OpenShell providers.
   const script = `#!/bin/bash
 # pg — query the database from Claude Code
 # Usage: pg "SELECT * FROM public.users LIMIT 5"
@@ -36,166 +38,30 @@ fi
   writeFileSync(path, script);
   chmodSync(path, 0o755);
 }
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { createPool } from './db/pool.js';
+import { runMigrations } from './db/migrations.js';
+import { syncToFs, syncFromFs, watchAndSync } from './sync.js';
 
-function writeClaudeGuide(homeDir: string): void {
-  const claudeMdPath = join(homeDir, 'CLAUDE.md');
-  if (existsSync(claudeMdPath)) return;
-
-  writeFileSync(claudeMdPath, `# OpenEral
-
-Your home directory persists across sessions.
-
-## Database
-
-Query the connected database:
-
-    pg "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-    pg "SELECT * FROM public.users LIMIT 5"
-    pg "\\d public.users"
-
-The \`pg\` command uses psql if available, otherwise Node.js pg.
-`);
-}
-
-async function ensureWorkspaceConfig(pool: import('pg').Pool, workspaceId: string): Promise<void> {
-  await pool.query(
-    `INSERT INTO _openeral.workspace_config (id, display_name, config)
-     VALUES ($1, $2, '{}'::jsonb)
-     ON CONFLICT (id) DO NOTHING`,
-    [workspaceId, workspaceId],
-  );
-}
-
-function formatUsage(): string {
-  return [
-    'Usage:',
-    '  openeral [--workspace <id>] [-- <claude args...>]',
-    '  openeral memory refresh [--workspace <id>] [--project-root <path>] [--query <text>] [--dry-run] [--no-backup]',
-    '',
-    'Environment:',
-    '  DATABASE_URL           Optional for launch, optional for memory refresh',
-    '  ANTHROPIC_API_KEY      Required by Claude Code itself',
-    '  OPENERAL_WORKSPACE_ID  Default workspace ID',
-    '  OPENERAL_HOME          Default local home path',
-  ].join('\n');
-}
-
-type LaunchCommand = {
-  kind: 'launch';
-  workspaceId: string;
-  claudeArgs: string[];
-};
-
-type MemoryRefreshCommand = {
-  kind: 'memory-refresh';
-  workspaceId: string;
-  query?: string;
-  projectRoot?: string;
-  dryRun: boolean;
-  backup: boolean;
-};
-
-type CliCommand = LaunchCommand | MemoryRefreshCommand | { kind: 'help' };
-
-export function parseCliArgs(argv: string[]): CliCommand {
+async function main() {
+  // --- Parse args ---
+  const args = process.argv.slice(2);
   let workspaceId = process.env.OPENERAL_WORKSPACE_ID || hostname();
+  let claudeArgs: string[] = [];
 
-  if (argv[0] === 'memory') {
-    if (argv[1] !== 'refresh') {
-      throw new Error(`unknown subcommand: ${argv.slice(0, 2).join(' ') || 'memory'}`);
-    }
-
-    let query: string | undefined;
-    let projectRoot: string | undefined;
-    let dryRun = false;
-    let backup = true;
-
-    for (let i = 2; i < argv.length; i++) {
-      const arg = argv[i];
-      if (arg === '--workspace' || arg === '-w') {
-        if (!argv[i + 1]) throw new Error(`${arg} requires a value`);
-        workspaceId = argv[++i];
-      } else if (arg === '--query' || arg === '-q') {
-        if (!argv[i + 1]) throw new Error(`${arg} requires a value`);
-        query = argv[++i];
-      } else if (arg === '--project-root') {
-        if (!argv[i + 1]) throw new Error(`${arg} requires a value`);
-        projectRoot = argv[++i];
-      } else if (arg === '--dry-run') {
-        dryRun = true;
-      } else if (arg === '--no-backup') {
-        backup = false;
-      } else if (arg === '--help' || arg === '-h') {
-        return { kind: 'help' };
-      } else {
-        throw new Error(`unknown argument: ${arg}`);
-      }
-    }
-
-    return {
-      kind: 'memory-refresh',
-      workspaceId,
-      query,
-      projectRoot,
-      dryRun,
-      backup,
-    };
-  }
-
-  const dashIdx = argv.indexOf('--');
-  const ownArgs = dashIdx >= 0 ? argv.slice(0, dashIdx) : argv;
-  const claudeArgs = dashIdx >= 0 ? argv.slice(dashIdx + 1) : [];
+  // Split on -- to separate openeral args from claude args
+  const dashIdx = args.indexOf('--');
+  const ownArgs = dashIdx >= 0 ? args.slice(0, dashIdx) : args;
+  claudeArgs = dashIdx >= 0 ? args.slice(dashIdx + 1) : [];
 
   for (let i = 0; i < ownArgs.length; i++) {
-    const arg = ownArgs[i];
-    if (arg === '--workspace' || arg === '-w') {
-      if (!ownArgs[i + 1]) throw new Error(`${arg} requires a value`);
+    if ((ownArgs[i] === '--workspace' || ownArgs[i] === '-w') && ownArgs[i + 1]) {
       workspaceId = ownArgs[++i];
-    } else if (arg === '--help' || arg === '-h') {
-      return { kind: 'help' };
-    } else {
-      throw new Error(`unknown argument: ${arg}`);
     }
   }
 
-  return {
-    kind: 'launch',
-    workspaceId,
-    claudeArgs,
-  };
-}
-
-function resolveHomeDir(workspaceId: string): string {
-  return process.env.OPENERAL_HOME || `/tmp/openeral-${workspaceId}`;
-}
-
-function printLaunchHeader(workspaceId: string, homeDir: string, persistenceEnabled: boolean): void {
-  process.stderr.write(`\x1b[2mopeneral: workspace  ${workspaceId}\x1b[0m\n`);
-  process.stderr.write(`\x1b[2mopeneral: home       ${homeDir}\x1b[0m\n`);
-  process.stderr.write(`\x1b[2mopeneral: persist    ${persistenceEnabled ? 'PostgreSQL' : 'local only'}\x1b[0m\n`);
-}
-
-function printMemorySummary(result: Awaited<ReturnType<typeof refreshClaudeMemory>>, persistenceEnabled: boolean): void {
-  const modeLabel = result.mode === 'default' ? 'default' : 'focus';
-  const verb = result.dryRun ? 'plan' : 'wrote';
-
-  process.stdout.write(`openeral memory: mode         ${modeLabel}\n`);
-  process.stdout.write(`openeral memory: persist      ${persistenceEnabled ? 'PostgreSQL' : 'local only'}\n`);
-  process.stdout.write(`openeral memory: content root ${result.context.contentRoot}\n`);
-  process.stdout.write(`openeral memory: memory root  ${result.context.memoryDir}\n`);
-  if (result.backupDir) {
-    process.stdout.write(`openeral memory: backup       ${result.backupDir}\n`);
-  }
-  process.stdout.write(`openeral memory: ${verb}        ${result.plannedFiles.join(', ')}\n`);
-  if (result.topSources.length > 0) {
-    process.stdout.write('openeral memory: top sources\n');
-    for (const chunk of result.topSources.slice(0, 8)) {
-      process.stdout.write(`  - ${chunk.relPath} (${chunk.score.toFixed(1)}): ${chunk.title}\n`);
-    }
-  }
-}
-
-async function runLaunchCommand(command: LaunchCommand): Promise<void> {
+  // --- Validate env ---
   const databaseUrl = process.env.DATABASE_URL;
   const persistenceEnabled = !!databaseUrl;
 
@@ -212,10 +78,15 @@ async function runLaunchCommand(command: LaunchCommand): Promise<void> {
     );
   }
 
-  const homeDir = resolveHomeDir(command.workspaceId);
+  // --- Setup home directory ---
+  const homeDir = process.env.OPENERAL_HOME || `/tmp/openeral-${workspaceId}`;
   mkdirSync(homeDir, { recursive: true });
-  printLaunchHeader(command.workspaceId, homeDir, persistenceEnabled);
 
+  process.stderr.write(`\x1b[2mopeneral: workspace  ${workspaceId}\x1b[0m\n`);
+  process.stderr.write(`\x1b[2mopeneral: home       ${homeDir}\x1b[0m\n`);
+  process.stderr.write(`\x1b[2mopeneral: persist    ${persistenceEnabled ? 'PostgreSQL' : 'local only'}\x1b[0m\n`);
+
+  // --- Database setup (only if DATABASE_URL is set) ---
   let pool: import('pg').Pool | null = null;
   let stopWatch: (() => void) | null = null;
 
@@ -224,30 +95,92 @@ async function runLaunchCommand(command: LaunchCommand): Promise<void> {
 
     process.stderr.write('\x1b[2mopeneral: running migrations...\x1b[0m\n');
     await runMigrations(pool);
-    await ensureWorkspaceConfig(pool, command.workspaceId);
 
+    // Ensure workspace config exists
+    await pool.query(
+      `INSERT INTO _openeral.workspace_config (id, display_name, config)
+       VALUES ($1, $2, '{}'::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [workspaceId, workspaceId],
+    );
+
+    // Sync from PostgreSQL → filesystem
     process.stderr.write('\x1b[2mopeneral: syncing workspace...\x1b[0m\n');
-    const synced = await syncToFs(pool, command.workspaceId, homeDir);
+    const synced = await syncToFs(pool, workspaceId, homeDir);
     process.stderr.write(`\x1b[2mopeneral: restored ${synced} files\x1b[0m\n`);
 
+    // Write pg helper
     const pgHelper = join(homeDir, '.local', 'bin', 'pg');
     mkdirSync(join(homeDir, '.local', 'bin'), { recursive: true });
     writePgHelper(pgHelper);
-    writeClaudeGuide(homeDir);
 
+    // Write CLAUDE.md
+    const claudeMdPath = join(homeDir, 'CLAUDE.md');
+    if (!existsSync(claudeMdPath)) {
+      writeFileSync(claudeMdPath, `# OpenEral
+
+Your home directory persists across sessions.
+
+## Database
+
+Query the connected database:
+
+    pg "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    pg "SELECT * FROM public.users LIMIT 5"
+    pg "\\d public.users"
+
+The \`pg\` command uses psql if available, otherwise Node.js pg.
+`);
+    }
+
+    // Start file watcher
     process.stderr.write('\x1b[2mopeneral: watching for changes...\x1b[0m\n');
-    stopWatch = watchAndSync(pool, command.workspaceId, homeDir);
+    stopWatch = watchAndSync(pool, workspaceId, homeDir);
   }
 
+  // --- StringCost auto-presign ---
+  const claudeEnv: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: homeDir,
+    PATH: `${join(homeDir, '.local', 'bin')}:${process.env.PATH}`,
+  };
+
+  if (process.env.STRINGCOST_API_KEY && process.env.ANTHROPIC_API_KEY) {
+    process.stderr.write('\x1b[2mopeneral: presigning with StringCost...\x1b[0m\n');
+    try {
+      const res = await fetch('https://app.stringcost.com/v1/presign', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.STRINGCOST_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          client_api_key: process.env.ANTHROPIC_API_KEY,
+          path: ['/v1/messages'],
+          expires_in: -1,
+          max_uses: -1,
+          tags: ['openeral'],
+          metadata: { source: 'openeral' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { url?: string };
+      if (data.url) {
+        claudeEnv.ANTHROPIC_BASE_URL = data.url.replace(/\/v1\/.*$/, '');
+        process.stderr.write('\x1b[2mopeneral: StringCost enabled — costs tracked automatically\x1b[0m\n');
+      }
+    } catch (err: any) {
+      process.stderr.write(`\x1b[33mopeneral: StringCost presign failed: ${err.message} — continuing without cost tracking\x1b[0m\n`);
+    }
+  }
+
+  // --- Launch Claude Code ---
   process.stderr.write('\x1b[2mopeneral: starting Claude Code\x1b[0m\n\n');
 
-  const child = spawn('claude', command.claudeArgs, {
+  const child = spawn('claude', claudeArgs, {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      PATH: `${join(homeDir, '.local', 'bin')}:${process.env.PATH}`,
-    },
+    env: claudeEnv,
   });
 
   child.on('error', (err: any) => {
@@ -268,7 +201,7 @@ async function runLaunchCommand(command: LaunchCommand): Promise<void> {
       stopWatch();
       process.stderr.write('\n\x1b[2mopeneral: saving workspace...\x1b[0m\n');
       try {
-        const saved = await syncFromFs(pool, command.workspaceId, homeDir);
+        const saved = await syncFromFs(pool, workspaceId, homeDir);
         process.stderr.write(`\x1b[2mopeneral: saved ${saved} files\x1b[0m\n`);
       } catch (err: any) {
         process.stderr.write(`\x1b[31mopeneral: sync failed: ${err.message}\x1b[0m\n`);
@@ -278,55 +211,13 @@ async function runLaunchCommand(command: LaunchCommand): Promise<void> {
     process.exit(code ?? 0);
   });
 
+  // Forward signals to child
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
     process.on(sig, () => child.kill(sig));
   }
 }
 
-async function runMemoryRefreshCommand(command: MemoryRefreshCommand): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  const persistenceEnabled = !!databaseUrl;
-  const homeDir = resolveHomeDir(command.workspaceId);
-  mkdirSync(homeDir, { recursive: true });
-
-  let pool: import('pg').Pool | null = null;
-
-  try {
-    if (persistenceEnabled) {
-      pool = createPool(databaseUrl);
-      await runMigrations(pool);
-      await ensureWorkspaceConfig(pool, command.workspaceId);
-      await syncToFs(pool, command.workspaceId, homeDir);
-    }
-
-    const result = await refreshClaudeMemory({
-      homeDir,
-      cwd: process.cwd(),
-      projectRoot: command.projectRoot,
-      query: command.query,
-      dryRun: command.dryRun,
-      backup: command.backup,
-    });
-
-    if (pool && !command.dryRun) {
-      await syncFromFs(pool, command.workspaceId, homeDir);
-    }
-
-    printMemorySummary(result, persistenceEnabled);
-  } finally {
-    await pool?.end();
-  }
-}
-
-export async function main(argv = process.argv.slice(2)): Promise<void> {
-  const command = parseCliArgs(argv);
-  if (command.kind === 'help') {
-    process.stdout.write(`${formatUsage()}\n`);
-    return;
-  }
-  if (command.kind === 'memory-refresh') {
-    await runMemoryRefreshCommand(command);
-    return;
-  }
-  await runLaunchCommand(command);
-}
+main().catch((err) => {
+  process.stderr.write(`\x1b[31mopeneral: ${err.message}\x1b[0m\n`);
+  process.exit(1);
+});
