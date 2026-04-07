@@ -1,4 +1,7 @@
 .env
+node_modules/
+dist/
+package-lock.json
 agent-task.txt
 openeral-shell/.env
 target/
