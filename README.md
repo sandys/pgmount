@@ -26,7 +26,6 @@ npx openeral
 
 That's it. Claude Code launches with an isolated home directory.
 
-<<<<<<< Add/new-feature
 **Add cost tracking** with [StringCost](https://github.com/arakoodev/stringcost) — just set your StringCost API key:
 
 ```bash
@@ -38,14 +37,6 @@ npx openeral
 
 When `STRINGCOST_API_KEY` is set, OpenEral automatically presigns with StringCost and routes all API traffic through it. Costs are tracked automatically — no extra configuration needed.
 
-=======
-For repo-local automation and harnesses after `pnpm build`, prefer the built bin directly:
-
-```bash
-node dist/bin/openeral.js
-```
-
->>>>>>> just-bash
 **Add persistence** by setting `DATABASE_URL` — files then survive across sessions:
 
 ```bash
