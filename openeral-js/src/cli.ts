@@ -44,7 +44,7 @@ import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrations.js';
 import { syncToFs, syncFromFs, watchAndSync } from './sync.js';
 
-async function main() {
+export async function main() {
   // --- Parse args ---
   const args = process.argv.slice(2);
   let workspaceId = process.env.OPENERAL_WORKSPACE_ID || hostname();
