@@ -44,9 +44,48 @@ import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrations.js';
 import { syncToFs, syncFromFs, watchAndSync } from './sync.js';
 
-export async function main() {
-  // --- Parse args ---
-  const args = process.argv.slice(2);
+type ParsedArgs = 
+  | { kind: 'launch'; workspaceId: string; claudeArgs: string[] }
+  | { kind: 'memory-refresh'; workspaceId: string; projectRoot: string; query: string; dryRun: boolean; backup: boolean }
+  | { kind: 'help' };
+
+export function parseCliArgs(args: string[]): ParsedArgs {
+  // Check for help
+  if (args.includes('--help') || args.includes('-h')) {
+    // Only show help if it's before --
+    const dashIdx = args.indexOf('--');
+    const helpIdx = Math.max(args.indexOf('--help'), args.indexOf('-h'));
+    if (dashIdx === -1 || helpIdx < dashIdx) {
+      return { kind: 'help' };
+    }
+  }
+
+  // Check for memory refresh command
+  if (args[0] === 'memory' && args[1] === 'refresh') {
+    let workspaceId = process.env.OPENERAL_WORKSPACE_ID || hostname();
+    let projectRoot = '';
+    let query = '';
+    let dryRun = false;
+    let backup = true;
+
+    for (let i = 2; i < args.length; i++) {
+      if ((args[i] === '--workspace' || args[i] === '-w') && args[i + 1]) {
+        workspaceId = args[++i];
+      } else if (args[i] === '--project-root' && args[i + 1]) {
+        projectRoot = args[++i];
+      } else if (args[i] === '--query' && args[i + 1]) {
+        query = args[++i];
+      } else if (args[i] === '--dry-run') {
+        dryRun = true;
+      } else if (args[i] === '--no-backup') {
+        backup = false;
+      }
+    }
+
+    return { kind: 'memory-refresh', workspaceId, projectRoot, query, dryRun, backup };
+  }
+
+  // Default: launch mode
   let workspaceId = process.env.OPENERAL_WORKSPACE_ID || hostname();
   let claudeArgs: string[] = [];
 
@@ -60,6 +99,49 @@ export async function main() {
       workspaceId = ownArgs[++i];
     }
   }
+
+  return { kind: 'launch', workspaceId, claudeArgs };
+}
+
+function printHelp(): void {
+  console.log(`Usage:
+  openeral [options] [-- claude-args]    Launch Claude Code with persistent home
+  openeral memory refresh [options]      Refresh memory system
+
+Launch Options:
+  --workspace, -w <id>    Workspace ID (default: hostname)
+  --help, -h              Show this help
+
+Memory Refresh Options:
+  --workspace, -w <id>    Workspace ID
+  --project-root <path>   Project root directory
+  --query <text>          Search query
+  --dry-run               Preview changes without applying
+  --no-backup             Skip backup creation
+
+Environment Variables:
+  DATABASE_URL            PostgreSQL connection string (required for persistence)
+  ANTHROPIC_API_KEY       Claude API key (required)
+  OPENERAL_WORKSPACE_ID   Default workspace ID
+  OPENERAL_HOME           Home directory path
+`);
+}
+
+export async function main() {
+  const parsed = parseCliArgs(process.argv.slice(2));
+
+  if (parsed.kind === 'help') {
+    printHelp();
+    return;
+  }
+
+  if (parsed.kind === 'memory-refresh') {
+    process.stderr.write('\x1b[31mopeneral: memory refresh not yet implemented\x1b[0m\n');
+    process.exit(1);
+  }
+
+  // Launch mode
+  const { workspaceId, claudeArgs } = parsed;
 
   // --- Validate env ---
   const databaseUrl = process.env.DATABASE_URL;
@@ -227,7 +309,10 @@ The \`pg\` command uses psql if available, otherwise Node.js pg.
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`\x1b[31mopeneral: ${err.message}\x1b[0m\n`);
-  process.exit(1);
-});
+// Only run main if this is the entry point (not imported by tests)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    process.stderr.write(`\x1b[31mopeneral: ${err.message}\x1b[0m\n`);
+    process.exit(1);
+  });
+}
